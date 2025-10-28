@@ -1,0 +1,14 @@
+services:
+  # Cài đặt dịch vụ bot chính (Web Service)
+  - type: web
+    name: ten-bot-cua-ban
+    env: python
+    buildCommand: |
+      apt-get update -y
+      apt-get install -y ffmpeg  # Lệnh cài đặt FFmpeg
+      pip install -r requirements.txt
+    startCommand: python main.py
+    plan: free
+    envVars:
+      - key: DISCORD_BOT_SECRET
+        sync: false
