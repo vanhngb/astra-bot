@@ -1,7 +1,7 @@
 services:
   # Cài đặt dịch vụ bot chính (Web Service)
   - type: web
-    name: ten-bot-cua-ban
+    name: ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶  𝜗𝜚˚⋆
     env: python
     buildCommand: |
       apt-get update -y
