@@ -81,26 +81,6 @@ async def on_member_join(member):
             f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆, mong bạn ở đây thật vui nhá ^^ "
             f"Có cần hỗ trợ gì thì <#{SUPPORT_CHANNEL_ID}> nhá"
         )
-# -----------------------
-# Lệnh !text để gửi tin nhắn dưới dạng Embed
-
-@bot.command()
-async def text(ctx, *, content: str):
-    # Xóa lệnh gốc
-    await ctx.message.delete()
-    
-    # Tạo Embed mới
-    embed = discord.Embed(
-        description=content, # Nội dung chính là nội dung người dùng nhập vào
-        color=discord.Color.from_rgb(46, 204, 113) # Màu xanh lá cây (có thể thay đổi)
-    )
-    
-    # Thêm tác giả (người dùng đã gõ lệnh) vào footer
-    embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.avatar.url)
-    
-    # Gửi Embed
-    await ctx.send(embed=embed)
-
 
 # -----------------------
 # Music player đã chuyển sang yt_dlp
@@ -180,6 +160,26 @@ async def out(ctx):
         music_queue[ctx.guild.id] = [] # Xóa queue
         await voice_client.disconnect()
         await ctx.send("Bot đã out voice channel")
+
+# -----------------------
+# Lệnh !text để gửi tin nhắn dưới dạng Embed (MỚI)
+@bot.command()
+async def text(ctx, *, content: str):
+    # Xóa lệnh gốc
+    await ctx.message.delete()
+    
+    # Tạo Embed mới
+    embed = discord.Embed(
+        description=content, # Nội dung chính là nội dung người dùng nhập vào
+        color=discord.Color.from_rgb(46, 204, 113) # Màu xanh lá cây (có thể thay đổi)
+    )
+    
+    # Thêm tác giả (người dùng đã gõ lệnh) vào footer
+    embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.avatar.url)
+    
+    # Gửi Embed
+    await ctx.send(embed=embed)
+# -----------------------
 
 # -----------------------
 # !post kèm attachment + nút Rent + Done
@@ -291,7 +291,7 @@ async def time(ctx, *, t: str):
     await ctx.send(f"{ctx.author.mention} ⏰ Thời gian kết thúc: **{final_end_time_vn.strftime('%H:%M:%S')}**! Đã hết giờ.")
 
 # -----------------------
-# QR command (Thay đổi: Giả định qr.png nằm cùng thư mục)
+# QR command
 @bot.command()
 async def qr(ctx):
     embed = Embed(description="Sau khi thanh toán xong thì gửi bill vào đây nhá. Không ghi NDCK giúp mình nha ୨୧")
@@ -317,4 +317,3 @@ if __name__ == '__main__':
         # Đây là lỗi phổ biến nếu TOKEN sai hoặc chưa được thiết lập
         if "Bad Gateway" in str(e) or "HTTP 401" in str(e):
              print("\nLỖI: Hãy kiểm tra lại TOKEN DISCORD_BOT_SECRET đã chính xác chưa.")
-
