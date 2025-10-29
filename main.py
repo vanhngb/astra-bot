@@ -9,7 +9,7 @@ import re
 import os
 import yt_dlp
 import requests
-import pytz # <--- THÊM import pytz VÀO ĐÂY ĐỂ ĐẶT MÚI GIỜ CHUẨN
+import pytz # Thư viện để quản lý múi giờ
 
 # -----------------------
 # Flask server để ping 24/7 (Không cần thay đổi)
@@ -40,8 +40,6 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # -----------------------
 # Cấu hình channel ID và admin
-# NOTE: Các ID này quá dài so với ID Discord hiện tại (18-19 chữ số).
-# Bạn nên kiểm tra lại các ID này (1432...) trong server của bạn.
 WELCOME_CHANNEL_ID = 1432659040680284191
 SUPPORT_CHANNEL_ID = 1432685282955755595
 IMAGE_CHANNEL_FEMALE = 1432691499094769704
@@ -65,7 +63,7 @@ async def keep_alive_ping():
         except Exception as e:
             print(f"Lỗi khi ping Healthchecks.io: {e}")
         
-        await asyncio.sleep(14 * 60) # Chờ 14 phút
+        await asyncio.sleep(14 * 60) # Chờ 14 phút (ít hơn thời gian ngủ 15 phút của Render)
 
 @bot.event
 async def on_ready():
@@ -164,7 +162,7 @@ async def out(ctx):
         await ctx.send("Bot đã out voice channel")
 
 # -----------------------
-# !post kèm attachment + nút Rent + Done (Không thay đổi)
+# !post kèm attachment + nút Rent + Done
 @bot.command()
 async def post(ctx, gender: str, *, caption: str = ""):
     if len(ctx.message.attachments) == 0:
