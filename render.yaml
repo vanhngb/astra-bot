@@ -1,14 +1,14 @@
 services:
-  # Cài đặt dịch vụ bot chính (Web Service)
   - type: web
-    name: ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶  𝜗𝜚˚⋆
+    name: astra-bot
     env: python
-    buildCommand: |
-      apt-get update -y
-      apt-get install -y ffmpeg  # Lệnh cài đặt FFmpeg
-      pip install -r requirements.txt
+    # Buildpacks được khai báo ở đây
+    buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     plan: free
+    buildPacks:
+      - url: https://github.com/render-examples/ffmpeg-buildpack
+      - url: https://github.com/render/buildpack-python
     envVars:
       - key: DISCORD_BOT_SECRET
         sync: false
