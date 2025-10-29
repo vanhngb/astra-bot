@@ -47,8 +47,7 @@ IMAGE_CHANNEL_MALE = 1432691597363122357
 ADMIN_ID = 757555763559399424
 
 # -----------------------
-# CODE PING 24/7 (Đã Fix)
-
+# CODE PING 24/7
 HC_PING_URL = os.getenv('HEALTHCHECKS_URL') # Lấy URL Ping từ biến môi trường
 
 async def keep_alive_ping():
@@ -58,17 +57,15 @@ async def keep_alive_ping():
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            # Gửi GET request đến Healthchecks.io để giữ bot thức
             requests.get(HC_PING_URL, timeout=10)
         except Exception as e:
             print(f"Lỗi khi ping Healthchecks.io: {e}")
         
-        await asyncio.sleep(14 * 60) # Chờ 14 phút (ít hơn thời gian ngủ 15 phút của Render)
+        await asyncio.sleep(14 * 60) # Chờ 14 phút
 
 @bot.event
 async def on_ready():
     print(f'Bot đã đăng nhập như {bot.user}')
-    # BẮT ĐẦU PING HEALTHCHECKS.IO KHI BOT SẴN SÀNG
     if HC_PING_URL:
         bot.loop.create_task(keep_alive_ping())
 
@@ -83,14 +80,14 @@ async def on_member_join(member):
         )
 
 # -----------------------
-# Music player đã chuyển sang yt_dlp
+# Music player
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'noplaylist': False,
     'quiet': True,
 }
-ffmpeg_options = {'options': '-vn'}
-# SỬ DỤNG yt_dlp THAY CHO youtube_dl
+# Đảm bảo ffmpeg_options được thiết lập
+ffmpeg_options = {'options': '-vn'} 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 music_queue = {}
 
@@ -102,33 +99,45 @@ async def play_next(ctx, voice_client):
     guild_id = ctx.guild.id
     ensure_queue(guild_id)
     if len(music_queue[guild_id]) == 0:
-        # Nếu hàng đợi trống, ngắt kết nối sau một thời gian
-        await asyncio.sleep(60) # Chờ 60s trước khi ngắt kết nối
+        await asyncio.sleep(60) 
         if len(music_queue[guild_id]) == 0:
              await voice_client.disconnect()
         return
+    
     url = music_queue[guild_id].pop(0)
     loop = asyncio.get_event_loop()
-    # Sử dụng yt_dlp
-    info = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
-    audio_url = info['url']
-    source = FFmpegPCMAudio(audio_url, **ffmpeg_options)
-    voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop))
+    try:
+        # Lấy thông tin và URL audio
+        info = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+        # Sử dụng URL trực tiếp từ info
+        audio_url = info.get('url') or info['formats'][0]['url'] 
+        source = FFmpegPCMAudio(audio_url, **ffmpeg_options)
+        voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop))
+    except Exception as e:
+        print(f"Lỗi phát nhạc: {e}")
+        await ctx.send(f"❌ Lỗi khi phát bài hát: {e}")
+        asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop) # Thử phát bài tiếp theo
 
 @bot.command()
 async def play(ctx, *, url):
     if not ctx.author.voice or not ctx.author.voice.channel:
         await ctx.send("Bạn cần vào voice channel trước!")
         return
+    
+    # Thêm check chặn lặp lại lệnh
+    if ctx.message.author.id == bot.user.id:
+        return
+
     channel = ctx.author.voice.channel
     voice_client = ctx.voice_client
     if not voice_client:
         voice_client = await channel.connect()
+    
     guild_id = ctx.guild.id
     ensure_queue(guild_id)
     
-    # Chỉ thêm vào queue nếu bot đã chơi hoặc queue đã có bài
-    if voice_client.is_playing() or len(music_queue[guild_id]) > 0:
+    # Logic phát/thêm vào queue
+    if voice_client.is_playing() or voice_client.is_paused() or len(music_queue[guild_id]) > 0:
         music_queue[guild_id].append(url)
         await ctx.send(f"Đã thêm vào queue: {url}")
     else:
@@ -138,8 +147,10 @@ async def play(ctx, *, url):
 
 @bot.command()
 async def next(ctx):
+    if ctx.message.author.id == bot.user.id:
+        return
     voice_client = ctx.voice_client
-    if voice_client and voice_client.is_playing():
+    if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
         voice_client.stop()
         await ctx.send("Bài tiếp theo...")
     else:
@@ -147,17 +158,22 @@ async def next(ctx):
 
 @bot.command()
 async def stop(ctx):
+    if ctx.message.author.id == bot.user.id:
+        return
     voice_client = ctx.voice_client
-    if voice_client and voice_client.is_playing():
-        voice_client.stop()
-        music_queue[ctx.guild.id] = [] # Xóa queue
+    if voice_client:
+        if voice_client.is_playing() or voice_client.is_paused():
+            voice_client.stop()
+        music_queue[ctx.guild.id] = [] 
         await ctx.send("Ngừng nhạc và xóa hàng đợi.")
 
 @bot.command()
 async def out(ctx):
+    if ctx.message.author.id == bot.user.id:
+        return
     voice_client = ctx.voice_client
     if voice_client:
-        music_queue[ctx.guild.id] = [] # Xóa queue
+        music_queue[ctx.guild.id] = [] 
         await voice_client.disconnect()
         await ctx.send("Bot đã out voice channel")
 
@@ -165,19 +181,16 @@ async def out(ctx):
 # Lệnh !text để gửi tin nhắn dưới dạng Embed
 @bot.command()
 async def text(ctx, *, content: str):
-    # Xóa lệnh gốc
+    if ctx.message.author.id == bot.user.id:
+        return
     await ctx.message.delete()
     
-    # Tạo Embed mới
     embed = discord.Embed(
-        description=content, # Nội dung chính là nội dung người dùng nhập vào
-        color=discord.Color.from_rgb(46, 204, 113) # Màu xanh lá cây (có thể thay đổi)
+        description=content, 
+        color=discord.Color.from_rgb(46, 204, 113) 
     )
-    
-    # Thêm tác giả (người dùng đã gõ lệnh) vào footer
     embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.avatar.url)
     
-    # Gửi Embed
     await ctx.send(embed=embed)
 # -----------------------
 
@@ -185,6 +198,8 @@ async def text(ctx, *, content: str):
 # !post kèm attachment + nút Rent + Done
 @bot.command()
 async def post(ctx, gender: str, *, caption: str = ""):
+    if ctx.message.author.id == bot.user.id:
+        return
     if len(ctx.message.attachments) == 0:
         await ctx.send("❌ Bạn chưa gửi ảnh kèm message!")
         return
@@ -203,9 +218,9 @@ async def post(ctx, gender: str, *, caption: str = ""):
 
     embed = Embed(description=caption)
     embed.set_image(url=f"attachment://{attachment.filename}")
-    posted_message = await channel.send(embed=embed, file=image_file)
-
+    
     class RentButton(ui.View):
+        # ... (Phần code RentButton giữ nguyên) ...
         def __init__(self):
             super().__init__(timeout=None)
 
@@ -214,7 +229,6 @@ async def post(ctx, gender: str, *, caption: str = ""):
             guild = interaction.guild
             member = interaction.user
             
-            # Kiểm tra xem có phải là bot đang cố gắng tạo channel không
             if member.bot:
                 await interaction.response.send_message("Bot không thể tương tác với nút này.", ephemeral=True)
                 return
@@ -245,14 +259,14 @@ async def post(ctx, gender: str, *, caption: str = ""):
             await temp_channel.send("Nhấn Done khi hoàn tất.", view=DoneButton())
             await interaction.response.send_message(f"✅ Đã tạo channel : {temp_channel.mention}", ephemeral=True)
 
+    await channel.send(embed=embed, file=image_file) # Gửi Embed và File trước
     await channel.send("Nhấn Rent để trao đổi nha khác iu ơi ⋆𐙚 ̊.", view=RentButton())
     await ctx.send("✅ Đã post bài thành công.")
 
 # -----------------------
-# Timer !time (ĐÃ SỬA LỖI MÚI GIỜ VÀ LẶP LẠI)
+# Timer !time 
 @bot.command()
 async def time(ctx, *, t: str):
-    # Kiểm tra để tránh xử lý lệnh lặp lại
     if ctx.message.author.id == bot.user.id:
         return
 
@@ -271,14 +285,11 @@ async def time(ctx, *, t: str):
         await ctx.send("Không nhận diện được thời gian! VD: !time 1h30m, !time 45m")
         return
     
-    # Đặt múi giờ Việt Nam (GMT+7)
     vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
     
     start_time_vn = datetime.now(vn_tz)
     end_time_vn = start_time_vn + timedelta(hours=hours, minutes=minutes)
     
-    # Sử dụng logic kiểm tra bot.user.id == ctx.message.author.id để tránh lặp lại
-    # Đã thêm ở đầu hàm, nên tin nhắn này sẽ không bị gửi lặp lại nếu Render chỉ chạy 1 instance
     await ctx.send(
         f"⏳ Oki vậy là mình bắt đầu từ **{start_time_vn.strftime('%H:%M:%S')}** (VN time) đến **{end_time_vn.strftime('%H:%M:%S')}** nha khách iu ơi ⋆𐙚 ̊."
     )
@@ -289,16 +300,17 @@ async def time(ctx, *, t: str):
     
     final_end_time_vn = datetime.now(vn_tz)
 
-    # Gửi tin nhắn kết thúc
     await ctx.send(f"{ctx.author.mention} ⏰ Thời gian kết thúc: **{final_end_time_vn.strftime('%H:%M:%S')}**! Đã hết giờ.")
 
 # -----------------------
 # QR command
 @bot.command()
 async def qr(ctx):
+    if ctx.message.author.id == bot.user.id:
+        return
+        
     embed = Embed(description="Sau khi thanh toán xong thì gửi bill vào đây nhá. Không ghi NDCK giúp mình nha ୨୧")
     
-    # Giả định file 'qr.png' nằm cùng thư mục với main.py
     qr_path = "qr.png" 
     
     if os.path.exists(qr_path):
@@ -306,7 +318,6 @@ async def qr(ctx):
         embed.set_image(url="attachment://qr.png")
         await ctx.send(embed=embed, file=qr_file)
     else:
-        # Nếu không có file qr.png, chỉ gửi embed mô tả
         await ctx.send("Không tìm thấy ảnh QR. " + embed.description, embed=embed)
 
 # -----------------------
@@ -316,6 +327,5 @@ if __name__ == '__main__':
         bot.run(TOKEN)
     except Exception as e:
         print(f"Bot gặp lỗi khi chạy: {e}")
-        # Đây là lỗi phổ biến nếu TOKEN sai hoặc chưa được thiết lập
         if "Bad Gateway" in str(e) or "HTTP 401" in str(e):
              print("\nLỖI: Hãy kiểm tra lại TOKEN DISCORD_BOT_SECRET đã chính xác chưa.")
