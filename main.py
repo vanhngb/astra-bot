@@ -1,12 +1,5 @@
 import discord
 from discord.ext import commands
-#... các imports khác
-import os
-import yt_dlp
-import requests # <--- THÊM DÒNG NÀY
-# -----------------------
-import discord
-from discord.ext import commands
 from discord import Embed, FFmpegPCMAudio, ui, File
 from flask import Flask
 from threading import Thread
@@ -14,7 +7,8 @@ import asyncio
 from datetime import datetime, timedelta
 import re
 import os
-import yt_dlp # Đã thay thế youtube_dl
+import yt_dlp
+import requests # ĐÃ THÊM DÒNG NÀY ĐỂ PING HEALTHCHECKS.IO
 
 # -----------------------
 # Flask server để ping 24/7 (Không cần thay đổi)
@@ -54,10 +48,32 @@ IMAGE_CHANNEL_MALE = 1432691597363122357
 ADMIN_ID = 757555763559399424
 
 # -----------------------
+# CODE PING 24/7 MỚI (THAY THẾ @bot.event async def on_ready() CŨ)
+
+HC_PING_URL = os.getenv('HEALTHCHECKS_URL') # Lấy URL Ping từ biến môi trường
+
+async def keep_alive_ping():
+    if not HC_PING_URL:
+        return
+    
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            # Gửi GET request đến Healthchecks.io để giữ bot thức
+            requests.get(HC_PING_URL, timeout=10)
+        except Exception as e:
+            print(f"Lỗi khi ping Healthchecks.io: {e}")
+        
+        await asyncio.sleep(14 * 60) # Chờ 14 phút (ít hơn thời gian ngủ 15 phút của Render)
+
 @bot.event
 async def on_ready():
     print(f'Bot đã đăng nhập như {bot.user}')
+    # BẮT ĐẦU PING HEALTHCHECKS.IO KHI BOT SẴN SÀNG
+    if HC_PING_URL:
+        bot.loop.create_task(keep_alive_ping())
 
+# -----------------------
 @bot.event
 async def on_member_join(member):
     channel = bot.get_channel(WELCOME_CHANNEL_ID)
@@ -266,5 +282,4 @@ if __name__ == '__main__':
         print(f"Bot gặp lỗi khi chạy: {e}")
         # Đây là lỗi phổ biến nếu TOKEN sai hoặc chưa được thiết lập
         if "Bad Gateway" in str(e) or "HTTP 401" in str(e):
-
              print("\nLỖI: Hãy kiểm tra lại TOKEN DISCORD_BOT_SECRET đã chính xác chưa.")
