@@ -162,7 +162,7 @@ async def out(ctx):
         await ctx.send("Bot đã out voice channel")
 
 # -----------------------
-# Lệnh !text để gửi tin nhắn dưới dạng Embed (MỚI)
+# Lệnh !text để gửi tin nhắn dưới dạng Embed
 @bot.command()
 async def text(ctx, *, content: str):
     # Xóa lệnh gốc
@@ -231,7 +231,7 @@ async def post(ctx, gender: str, *, caption: str = ""):
                 overwrites=overwrites
             )
 
-            await temp_channel.send(f"Channel đã tạo cho {member.mention} . Bạn đợi xíu bên mình phản hồi lại nhaaa.")
+            await temp_channel.send(f"Channel đã tạo cho {member.mention} . Bạn thuê Player nào ạ? Bạn đợi xíu bên mình phản hồi lại nhaaa.")
 
             class DoneButton(ui.View):
                 def __init__(self):
@@ -240,12 +240,12 @@ async def post(ctx, gender: str, *, caption: str = ""):
                 @ui.button(label="Done", style=discord.ButtonStyle.danger)
                 async def done(self, interaction2: discord.Interaction, button2: discord.ui.Button):
                     await temp_channel.delete()
-                    await interaction2.response.send_message("✅ Channel tạm thời đã xóa.", ephemeral=True)
+                    await interaction2.response.send_message("✅ Channel đã xóa.", ephemeral=True)
 
             await temp_channel.send("Nhấn Done khi hoàn tất.", view=DoneButton())
             await interaction.response.send_message(f"✅ Đã tạo channel : {temp_channel.mention}", ephemeral=True)
 
-    await channel.send("Nhấn Rent để tạo channel tạm thời", view=RentButton())
+    await channel.send("Nhấn Rent để trao đổi nha khác iu ơi ⋆𐙚 ̊.", view=RentButton())
     await ctx.send("✅ Đã post bài thành công.")
 
 # -----------------------
@@ -277,8 +277,10 @@ async def time(ctx, *, t: str):
     start_time_vn = datetime.now(vn_tz)
     end_time_vn = start_time_vn + timedelta(hours=hours, minutes=minutes)
     
+    # Sử dụng logic kiểm tra bot.user.id == ctx.message.author.id để tránh lặp lại
+    # Đã thêm ở đầu hàm, nên tin nhắn này sẽ không bị gửi lặp lại nếu Render chỉ chạy 1 instance
     await ctx.send(
-        f"⏳ Đếm ngược bắt đầu lúc **{start_time_vn.strftime('%H:%M:%S')}** (VN time) và kết thúc lúc **{end_time_vn.strftime('%H:%M:%S')}**"
+        f"⏳ Oki vậy là mình bắt đầu từ **{start_time_vn.strftime('%H:%M:%S')}** (VN time) đến **{end_time_vn.strftime('%H:%M:%S')}** nha khách iu ơi ⋆𐙚 ̊."
     )
 
     total_seconds = hours * 3600 + minutes * 60
