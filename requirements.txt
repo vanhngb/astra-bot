@@ -2,4 +2,4 @@ discord.py
 flask
 yt-dlp
 ffmpeg-python
-py-webrtcvad
+
