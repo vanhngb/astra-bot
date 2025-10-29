@@ -2,10 +2,11 @@ services:
   - type: web
     name: astra-bot
     env: python
-    # Buildpacks được khai báo ở đây
+    # Lệnh Build Command mới, không còn apt-get
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     plan: free
+    # Thêm Buildpacks để cài đặt FFmpeg
     buildPacks:
       - url: https://github.com/render-examples/ffmpeg-buildpack
       - url: https://github.com/render/buildpack-python
