@@ -187,7 +187,7 @@ async def text(ctx, *, content: str):
     
     embed = discord.Embed(
         description=content, 
-        color=discord.Color.from_rgb(46, 204, 113) 
+        color=discord.Color.from_rgb(255, 209, 220) 
     )
     embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.avatar.url)
     
@@ -329,3 +329,4 @@ if __name__ == '__main__':
         print(f"Bot gặp lỗi khi chạy: {e}")
         if "Bad Gateway" in str(e) or "HTTP 401" in str(e):
              print("\nLỖI: Hãy kiểm tra lại TOKEN DISCORD_BOT_SECRET đã chính xác chưa.")
+
