@@ -1,5 +1,12 @@
 import discord
 from discord.ext import commands
+#... các imports khác
+import os
+import yt_dlp
+import requests # <--- THÊM DÒNG NÀY
+# -----------------------
+import discord
+from discord.ext import commands
 from discord import Embed, FFmpegPCMAudio, ui, File
 from flask import Flask
 from threading import Thread
@@ -259,4 +266,5 @@ if __name__ == '__main__':
         print(f"Bot gặp lỗi khi chạy: {e}")
         # Đây là lỗi phổ biến nếu TOKEN sai hoặc chưa được thiết lập
         if "Bad Gateway" in str(e) or "HTTP 401" in str(e):
+
              print("\nLỖI: Hãy kiểm tra lại TOKEN DISCORD_BOT_SECRET đã chính xác chưa.")
