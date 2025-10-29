@@ -256,11 +256,11 @@ async def post(ctx, gender: str, *, caption: str = ""):
                     await temp_channel.delete()
                     await interaction2.response.send_message("✅ Channel đã xóa.", ephemeral=True)
 
-            await temp_channel.send("Nhấn Done khi hoàn tất.", view=DoneButton())
+            await temp_channel.send("Nhấn Done khi hoàn tất đơn nhé ạaaa.", view=DoneButton())
             await interaction.response.send_message(f"✅ Đã tạo channel : {temp_channel.mention}", ephemeral=True)
 
     await channel.send(embed=embed, file=image_file) # Gửi Embed và File trước
-    await channel.send("Nhấn Rent để trao đổi nha khác iu ơi ⋆𐙚 ̊.", view=RentButton())
+    await channel.send("Nhấn Rent để trao đổi nha khách iu ơi ⋆𐙚 ̊.", view=RentButton())
     await ctx.send("✅ Đã post bài thành công.")
 
 # -----------------------
@@ -329,4 +329,5 @@ if __name__ == '__main__':
         print(f"Bot gặp lỗi khi chạy: {e}")
         if "Bad Gateway" in str(e) or "HTTP 401" in str(e):
              print("\nLỖI: Hãy kiểm tra lại TOKEN DISCORD_BOT_SECRET đã chính xác chưa.")
+
 
