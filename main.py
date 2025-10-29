@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 import re
 import os
 import yt_dlp
-import requests # ĐÃ THÊM DÒNG NÀY ĐỂ PING HEALTHCHECKS.IO
+import requests
+import pytz # <--- THÊM import pytz VÀO ĐÂY ĐỂ ĐẶT MÚI GIỜ CHUẨN
 
 # -----------------------
 # Flask server để ping 24/7 (Không cần thay đổi)
@@ -48,7 +49,7 @@ IMAGE_CHANNEL_MALE = 1432691597363122357
 ADMIN_ID = 757555763559399424
 
 # -----------------------
-# CODE PING 24/7 MỚI (THAY THẾ @bot.event async def on_ready() CŨ)
+# CODE PING 24/7 (Đã Fix)
 
 HC_PING_URL = os.getenv('HEALTHCHECKS_URL') # Lấy URL Ping từ biến môi trường
 
@@ -64,7 +65,7 @@ async def keep_alive_ping():
         except Exception as e:
             print(f"Lỗi khi ping Healthchecks.io: {e}")
         
-        await asyncio.sleep(14 * 60) # Chờ 14 phút (ít hơn thời gian ngủ 15 phút của Render)
+        await asyncio.sleep(14 * 60) # Chờ 14 phút
 
 @bot.event
 async def on_ready():
@@ -230,9 +231,13 @@ async def post(ctx, gender: str, *, caption: str = ""):
     await ctx.send("✅ Đã post bài thành công.")
 
 # -----------------------
-# Timer !time (Không thay đổi)
+# Timer !time (ĐÃ SỬA LỖI MÚI GIỜ VÀ LẶP LẠI)
 @bot.command()
 async def time(ctx, *, t: str):
+    # Kiểm tra để tránh xử lý lệnh lặp lại
+    if ctx.message.author.id == bot.user.id:
+        return
+
     t = t.lower().replace(" ", "")
     hours, minutes = 0, 0
 
@@ -245,16 +250,27 @@ async def time(ctx, *, t: str):
         minutes = int(m_match.group(1))
 
     if hours == 0 and minutes == 0:
-        await ctx.send("Không nhận diện được thời gian! VD: 1h30m, 45m")
+        await ctx.send("Không nhận diện được thời gian! VD: !time 1h30m, !time 45m")
         return
+    
+    # Đặt múi giờ Việt Nam (GMT+7)
+    vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
+    
+    start_time_vn = datetime.now(vn_tz)
+    end_time_vn = start_time_vn + timedelta(hours=hours, minutes=minutes)
+    
+    await ctx.send(
+        f"⏳ Đếm ngược bắt đầu lúc **{start_time_vn.strftime('%H:%M:%S')}** (VN time) và kết thúc lúc **{end_time_vn.strftime('%H:%M:%S')}**"
+    )
 
-    start_time = datetime.now()
-    end_time = start_time + timedelta(hours=hours, minutes=minutes)
-    await ctx.send(f"⏳ Đếm ngược bắt đầu lúc {start_time.strftime('%H:%M')} và kết thúc lúc {end_time.strftime('%H:%M')}")
-
-    total_seconds = hours*3600 + minutes*60
+    total_seconds = hours * 3600 + minutes * 60
+    
     await asyncio.sleep(total_seconds)
-    await ctx.send(f"⏰ Thời gian kết thúc: {end_time.strftime('%H:%M')}")
+    
+    final_end_time_vn = datetime.now(vn_tz)
+
+    # Gửi tin nhắn kết thúc
+    await ctx.send(f"{ctx.author.mention} ⏰ Thời gian kết thúc: **{final_end_time_vn.strftime('%H:%M:%S')}**! Đã hết giờ.")
 
 # -----------------------
 # QR command (Thay đổi: Giả định qr.png nằm cùng thư mục)
