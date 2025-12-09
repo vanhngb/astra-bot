@@ -1,11 +1,8 @@
 # bot_full.py
-# Full-featured Discord bot (single-file)
-# - Python 3.11 recommended
-# - Uses discord.py
-# - SQLite storage (luong.db)
-# - Pastel pink embeds (0xFFB7D5)
-# - Features: salary (!luong), prf, !io/by, !dnt/by, voice auto-create, room controls,
-#   post/rent (1:1), qr, time, text, clear, av, ban, mute, giveaway, rd, choose, monthly report
+# Full-featured bot per user's spec
+# Python 3.10+ (3.11 recommended)
+# Requirements: discord.py, pytz, flask
+# Set env DISCORD_BOT_SECRET before running.
 
 import os
 import re
@@ -26,52 +23,56 @@ from flask import Flask
 # -------------------------
 TOKEN = os.getenv("DISCORD_BOT_SECRET")
 if not TOKEN:
-    print("ERROR: Please set DISCORD_BOT_SECRET environment variable.")
+    print("ERROR: Set DISCORD_BOT_SECRET environment variable")
     exit(1)
 
-# Channel & IDs (from your requests)
+# Channels & IDs
 WELCOME_CHANNEL_ID = 1432659040680284191
 SUPPORT_CHANNEL_ID = 1432685282955755595
-IMAGE_CHANNEL_FEMALE = 1432691499094769704
-IMAGE_CHANNEL_MALE = 1432691597363122357
+IMAGE_CHANNEL_FEMALE = 1432691499094769704  # for !post fm
+IMAGE_CHANNEL_MALE = 1432691597363122357    # for !post m
 
-CHANNEL_IO_DNT = 1448047569421733981         # IO / DNT log channel
-CHANNEL_MONTHLY_REPORT = 1448052039384043683 # monthly report channel
+# Post rent category
+RENT_CATEGORY_ID = 1448062526599205037
 
-TRIGGER_VOICE_CREATE = 1432658695719751794   # join to auto-create public voice
-TRIGGER_VOICE_PRIVATE = 1448063002518487092  # join to auto-create private locked voice
+# Voice triggers and category
+TRIGGER_VOICE_CREATE = 1432658695719751794   # join -> create public voice
+TRIGGER_VOICE_PRIVATE = 1448063002518487092  # join -> create private voice
+VOICE_CATEGORY_ID = 1432658695719751792      # voice rooms appear inside this category
 
-EXEMPT_ROLE_ID = 1432670531529867295        # role allowed to see hidden rooms
+# Exempt role & admin
+EXEMPT_ROLE_ID = 1432670531529867295
 ADMIN_ID = 757555763559399424
 
-ALLOWED_ROLE_NAME = "Staff"  # role name allowed to use io/dnt etc.
+ALLOWED_ROLE_NAME = "Staff"
 
-LUONG_GIO_RATE = 25000  # VNĐ per hour
+CHANNEL_IO_DNT = 1448047569421733981
+CHANNEL_MONTHLY_REPORT = 1448052039384043683
 
+LUONG_GIO_RATE = 25000
 PASTEL_PINK = 0xFFB7D5
 
 VN_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
-
 DB_FILE = "luong.db"
 
-# Flask keep-alive (optional)
-app = Flask('')
-@app.route('/')
+# Flask keepalive
+app = Flask("")
+@app.route("/")
 def home():
-    return "Bot is running"
+    return "Bot running"
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
 Thread(target=run_flask).start()
 
 # -------------------------
-# DISCORD BOT SETUP
+# Bot init
 # -------------------------
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -------------------------
-# DATABASE (SQLite) SETUP
+# Database init
 # -------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -80,8 +81,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         book_hours INTEGER DEFAULT 0,
-        donate INTEGER DEFAULT 0,
-        in_time TEXT
+        donate INTEGER DEFAULT 0
     )""")
     cur.execute("""
     CREATE TABLE IF NOT EXISTS prf (
@@ -90,13 +90,12 @@ def init_db():
         prf_donate INTEGER DEFAULT 0
     )""")
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS logs (
+    CREATE TABLE IF NOT EXISTS codes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        in_time TEXT,
-        out_time TEXT,
-        hours INTEGER,
-        created_at TEXT
+        title TEXT UNIQUE,
+        target_user_id TEXT,
+        content TEXT,
+        image_url TEXT
     )""")
     cur.execute("""
     CREATE TABLE IF NOT EXISTS rooms (
@@ -105,9 +104,6 @@ def init_db():
         is_hidden INTEGER DEFAULT 0,
         is_locked INTEGER DEFAULT 0
     )""")
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS monthly_sent ( ym TEXT PRIMARY KEY )
-    """)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS giveaways (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,38 +115,41 @@ def init_db():
         end_at TEXT,
         ended INTEGER DEFAULT 0
     )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS monthly_sent ( ym TEXT PRIMARY KEY )
+    """)
     conn.commit()
     conn.close()
 
 init_db()
 
+# -------------------------
 # DB helpers
-def db_get_user(uid: str):
+# -------------------------
+def db_get_user(uid):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    cur.execute("SELECT user_id, book_hours, donate, in_time FROM users WHERE user_id=?", (uid,))
+    cur.execute("SELECT user_id, book_hours, donate FROM users WHERE user_id=?", (uid,))
     row = cur.fetchone()
     if not row:
-        cur.execute("INSERT INTO users(user_id, book_hours, donate, in_time) VALUES (?,?,?,NULL)", (uid,0,0))
+        cur.execute("INSERT INTO users(user_id, book_hours, donate) VALUES (?,?,?)", (uid,0,0))
         conn.commit()
-        cur.execute("SELECT user_id, book_hours, donate, in_time FROM users WHERE user_id=?", (uid,))
+        cur.execute("SELECT user_id, book_hours, donate FROM users WHERE user_id=?", (uid,))
         row = cur.fetchone()
     conn.close()
-    return {"user_id": row[0], "book_hours": int(row[1]), "donate": int(row[2]), "in_time": row[3]}
+    return {"user_id": row[0], "book_hours": int(row[1]), "donate": int(row[2])}
 
-def db_update_user(uid: str, book_hours=None, donate=None, in_time=None):
+def db_update_user(uid, book_hours=None, donate=None):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     if book_hours is not None:
-        cur.execute("UPDATE users SET book_hours=? WHERE user_id=?", (book_hours, uid))
+        cur.execute("UPDATE users SET book_hours=? WHERE user_id=?", (int(book_hours), uid))
     if donate is not None:
-        cur.execute("UPDATE users SET donate=? WHERE user_id=?", (donate, uid))
-    if in_time is not None:
-        cur.execute("UPDATE users SET in_time=? WHERE user_id=?", (in_time, uid))
+        cur.execute("UPDATE users SET donate=? WHERE user_id=?", (int(donate), uid))
     conn.commit()
     conn.close()
 
-def db_prf_get(uid: str):
+def db_prf_get(uid):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("SELECT prf_hours, prf_donate FROM prf WHERE user_id=?", (uid,))
@@ -163,7 +162,7 @@ def db_prf_get(uid: str):
     conn.close()
     return {"prf_hours": int(row[0]), "prf_donate": int(row[1])}
 
-def db_prf_add_hours(uid: str, hours: int):
+def db_prf_add_hours(uid, hours):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("INSERT OR IGNORE INTO prf(user_id, prf_hours, prf_donate) VALUES (?,?,?)", (uid,0,0))
@@ -171,7 +170,7 @@ def db_prf_add_hours(uid: str, hours: int):
     conn.commit()
     conn.close()
 
-def db_prf_add_donate(uid: str, amount: int):
+def db_prf_add_donate(uid, amount):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("INSERT OR IGNORE INTO prf(user_id, prf_hours, prf_donate) VALUES (?,?,?)", (uid,0,0))
@@ -179,45 +178,53 @@ def db_prf_add_donate(uid: str, amount: int):
     conn.commit()
     conn.close()
 
-def db_add_log(uid: str, in_time: str, out_time: str, hours: int):
+def db_save_code(title, target_user_id, content, image_url=None):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    now = datetime.now(VN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("INSERT INTO logs(user_id, in_time, out_time, hours, created_at) VALUES (?,?,?,?,?)",
-                (uid, in_time, out_time, int(hours), now))
+    cur.execute("INSERT OR REPLACE INTO codes(title, target_user_id, content, image_url) VALUES (?,?,?,?)",
+                (title, str(target_user_id), content, image_url))
     conn.commit()
     conn.close()
 
-def db_get_logs(uid: str, limit=20):
+def db_get_code_by_title(title):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    cur.execute("SELECT in_time, out_time, hours, created_at FROM logs WHERE user_id=? ORDER BY id DESC LIMIT ?", (uid, limit))
-    rows = cur.fetchall()
+    cur.execute("SELECT title, target_user_id, content, image_url FROM codes WHERE title=?", (title,))
+    row = cur.fetchone()
     conn.close()
-    return rows
+    if row:
+        return {"title": row[0], "target_user_id": row[1], "content": row[2], "image_url": row[3]}
+    return None
 
-def db_add_room(voice_id: str, owner_id: str, is_hidden=0, is_locked=0):
+def db_delete_code_by_user_id(target_user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM codes WHERE target_user_id=?", (str(target_user_id),))
+    conn.commit()
+    conn.close()
+
+def db_add_room(voice_id, owner_id, is_hidden=0, is_locked=0):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("INSERT OR REPLACE INTO rooms(voice_channel_id, owner_id, is_hidden, is_locked) VALUES (?,?,?,?)",
-                (voice_id, owner_id, is_hidden, is_locked))
+                (str(voice_id), str(owner_id), int(is_hidden), int(is_locked)))
     conn.commit()
     conn.close()
 
-def db_get_room(voice_id: str):
+def db_get_room(voice_id):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    cur.execute("SELECT voice_channel_id, owner_id, is_hidden, is_locked FROM rooms WHERE voice_channel_id=?", (voice_id,))
+    cur.execute("SELECT voice_channel_id, owner_id, is_hidden, is_locked FROM rooms WHERE voice_channel_id=?", (str(voice_id),))
     r = cur.fetchone()
     conn.close()
     if r:
         return {"voice_channel_id": r[0], "owner_id": r[1], "is_hidden": bool(r[2]), "is_locked": bool(r[3])}
     return None
 
-def db_delete_room(voice_id: str):
+def db_delete_room(voice_id):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    cur.execute("DELETE FROM rooms WHERE voice_channel_id=?", (voice_id,))
+    cur.execute("DELETE FROM rooms WHERE voice_channel_id=?", (str(voice_id),))
     conn.commit()
     conn.close()
 
@@ -229,7 +236,7 @@ def db_get_all_users():
     conn.close()
     return rows
 
-def db_monthly_sent_exists(ym: str):
+def db_monthly_sent_exists(ym):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("SELECT 1 FROM monthly_sent WHERE ym=?", (ym,))
@@ -237,7 +244,7 @@ def db_monthly_sent_exists(ym: str):
     conn.close()
     return exists
 
-def db_monthly_mark_sent(ym: str):
+def db_monthly_mark_sent(ym):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("INSERT OR IGNORE INTO monthly_sent(ym) VALUES (?)", (ym,))
@@ -245,11 +252,11 @@ def db_monthly_mark_sent(ym: str):
     conn.close()
 
 # -------------------------
-# HELPERS
+# Helpers
 # -------------------------
-def fmt_vnd(amount):
+def fmt_vnd(n):
     try:
-        a = int(round(float(amount)))
+        a = int(round(float(n)))
     except:
         a = 0
     return f"{a:,} đ".replace(",", ".")
@@ -268,64 +275,92 @@ def has_io_permission(member: discord.Member):
     return False
 
 # -------------------------
-# VOICE AUTO-CREATE + CLEANUP
+# Welcome with avatar image embed
+# -------------------------
+@bot.event
+async def on_member_join(member):
+    channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    if not channel:
+        return
+    try:
+        av_url = member.avatar.url if member.avatar else member.default_avatar.url
+    except:
+        av_url = None
+    embed = Embed(title=f"Chào mừng {member.display_name}!", description="Chúc bạn có trải nghiệm tốt tại server!", color=PASTEL_PINK)
+    if av_url:
+        embed.set_thumbnail(url=av_url)
+    embed.set_footer(text=f"Joined at {datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
+    try:
+        await channel.send(embed=embed)
+    except:
+        pass
+
+# -------------------------
+# Voice auto-create and cleanup
 # -------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
     try:
-        # joined create channel trigger (public)
+        # create public room if user joins TRIGGER_VOICE_CREATE
         if (before.channel is None or (before.channel and before.channel.id != TRIGGER_VOICE_CREATE)) and after.channel and after.channel.id == TRIGGER_VOICE_CREATE:
             guild = member.guild
             name = f"⋆𐙚 ̊. - {member.name}"
+            category = discord.utils.get(guild.categories, id=VOICE_CATEGORY_ID)
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(connect=True, view_channel=True),
-                member: discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True)
+                member: discord.PermissionOverwrite(connect=True, view_channel=True)
             }
-            new_channel = await guild.create_voice_channel(name, overwrites=overwrites, reason="Auto-created voice room")
+            new_voice = await guild.create_voice_channel(name, overwrites=overwrites, category=category, reason="Auto-created public voice")
             # move member
             try:
-                await member.move_to(new_channel)
+                await member.move_to(new_voice)
             except:
                 pass
-            db_add_room(str(new_channel.id), str(member.id), is_hidden=0, is_locked=0)
-            # send room control embed to support channel or guild.system_channel
+            db_add_room(str(new_voice.id), str(member.id), is_hidden=0, is_locked=0)
+            # post control message in support channel (buttons)
             ch = guild.get_channel(SUPPORT_CHANNEL_ID) or guild.system_channel
             if ch:
-                embed = Embed(title="Room created", description=f"Voice room for {member.mention}", color=PASTEL_PINK)
-                embed.add_field(name="Room", value=f"{new_channel.mention}", inline=False)
-                view = RoomControlView(new_channel.id, member.id)
-                await ch.send(embed=embed, view=view)
-        # joined private trigger
+                embed = Embed(title="Voice room created", description=f"{member.mention} vừa tạo voice room.", color=PASTEL_PINK)
+                embed.add_field(name="Room", value=f"{new_voice.mention}", inline=False)
+                view = RoomControlView(new_voice.id, member.id)
+                try:
+                    await ch.send(embed=embed, view=view)
+                except:
+                    pass
+
+        # create private room for TRIGGER_VOICE_PRIVATE
         if (before.channel is None or (before.channel and before.channel.id != TRIGGER_VOICE_PRIVATE)) and after.channel and after.channel.id == TRIGGER_VOICE_PRIVATE:
             guild = member.guild
             name = f"⋆𐙚 ̊. - {member.name}"
+            category = discord.utils.get(guild.categories, id=VOICE_CATEGORY_ID)
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(connect=False, view_channel=False),
-                member: discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True),
+                member: discord.PermissionOverwrite(connect=True, view_channel=True)
             }
-            # also give admins see
             admin_member = guild.get_member(ADMIN_ID)
             if admin_member:
-                overwrites[admin_member] = discord.PermissionOverwrite(view_channel=True, connect=True)
-            new_channel = await guild.create_voice_channel(name, overwrites=overwrites, reason="Auto-created private voice room")
+                overwrites[admin_member] = discord.PermissionOverwrite(connect=True, view_channel=True)
+            new_voice = await guild.create_voice_channel(name, overwrites=overwrites, category=category, reason="Auto-created private voice")
             try:
-                await member.move_to(new_channel)
+                await member.move_to(new_voice)
             except:
                 pass
-            db_add_room(str(new_channel.id), str(member.id), is_hidden=1, is_locked=1)
+            db_add_room(str(new_voice.id), str(member.id), is_hidden=1, is_locked=1)
             ch = guild.get_channel(SUPPORT_CHANNEL_ID) or guild.system_channel
             if ch:
-                embed = Embed(title="Private Room created", description=f"Private voice room for {member.mention}", color=PASTEL_PINK)
-                embed.add_field(name="Room", value=f"{new_channel.mention}", inline=False)
-                view = RoomControlView(new_channel.id, member.id)
-                await ch.send(embed=embed, view=view)
+                embed = Embed(title="Private voice room created", description=f"{member.mention} vừa tạo private voice room.", color=PASTEL_PINK)
+                embed.add_field(name="Room", value=f"{new_voice.mention}", inline=False)
+                view = RoomControlView(new_voice.id, member.id)
+                try:
+                    await ch.send(embed=embed, view=view)
+                except:
+                    pass
 
-        # left a channel: if it's an auto-created room and now empty -> delete
+        # cleanup empty auto rooms
         if before.channel and (after.channel is None or (after.channel and after.channel.id != before.channel.id)):
             left_channel = before.channel
             room = db_get_room(str(left_channel.id))
             if room:
-                # if no members remain -> delete and remove from DB
                 if len(left_channel.members) == 0:
                     try:
                         await left_channel.delete(reason="Auto-delete empty room")
@@ -333,130 +368,147 @@ async def on_voice_state_update(member, before, after):
                         pass
                     db_delete_room(str(left_channel.id))
     except Exception as e:
-        print("voice_state_update error:", e)
+        print("voice error:", e)
 
 # -------------------------
-# ROOM CONTROL VIEW (Lock/Unlock/Hide/Invite)
+# Room control view
 # -------------------------
 class InviteModal(ui.Modal):
-    user_mention = ui.TextInput(label="Nhập mention user (ví dụ @user)", required=True, placeholder="@user")
-    def __init__(self, channel_id: str):
-        super().__init__(title="Invite to room")
+    user_field = ui.TextInput(label="Nhập mention (vd: @user)", required=True, placeholder="@user")
+    def __init__(self, channel_id:str):
+        super().__init__(title="Invite user")
         self.channel_id = channel_id
     async def on_submit(self, interaction: discord.Interaction):
-        text = self.user_mention.value.strip()
-        mentions = re.findall(r'<@!?(\d+)>', text)
-        if not mentions:
+        text = self.user_field.value.strip()
+        ids = re.findall(r'<@!?(\d+)>', text)
+        if not ids:
             await interaction.response.send_message("Không tìm thấy mention.", ephemeral=True); return
         ch = interaction.guild.get_channel(int(self.channel_id))
         if not ch:
             await interaction.response.send_message("Channel không tồn tại.", ephemeral=True); return
-        for uid in mentions:
+        for uid in ids:
             member = interaction.guild.get_member(int(uid))
             if member:
                 try:
-                    await ch.set_permissions(member, connect=True, view_channel=True)
+                    await ch.set_permissions(member, view_channel=True, connect=True)
                 except:
                     pass
         await interaction.response.send_message("Đã invite (không gửi thông báo).", ephemeral=True)
 
 class RoomControlView(ui.View):
-    def __init__(self, voice_id: int, owner_id: int):
+    def __init__(self, voice_id:int, owner_id:int):
         super().__init__(timeout=None)
         self.voice_id = str(voice_id)
         self.owner_id = str(owner_id)
 
-    def _is_allowed(self, user: discord.Member):
-        # allowed if owner, admin, or has exempt role
-        if user.id == int(self.owner_id): return True
+    def _is_in_voice(self, guild, user:discord.Member):
+        try:
+            ch = guild.get_channel(int(self.voice_id))
+            if not ch:
+                return False
+            return any(m.id == user.id for m in ch.members)  # but voice channel members list
+        except:
+            return False
+
+    def _is_allowed(self, guild, user:discord.Member):
+        # per your request: any member in room or admin or exempt role can press
         if is_admin(user): return True
         for r in user.roles:
-            if r.id == EXEMPT_ROLE_ID:
-                return True
+            if r.id == EXEMPT_ROLE_ID: return True
+        # check if user is currently in the voice channel
+        ch = guild.get_channel(int(self.voice_id))
+        if ch and any(m.id == user.id for m in ch.members):
+            return True
         return False
 
-    async def _get_channel(self, interaction: discord.Interaction):
+    async def _get_channel(self, interaction):
         return interaction.guild.get_channel(int(self.voice_id))
 
-    @ui.button(label="Lock room", style=discord.ButtonStyle.danger, custom_id="room_lock")
-    async def lock(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(label="Lock room", style=discord.ButtonStyle.danger, custom_id="btn_lock")
+    async def lock(self, button, interaction: discord.Interaction):
         ch = await self._get_channel(interaction)
         if not ch:
             await interaction.response.send_message("Channel không tồn tại.", ephemeral=True); return
-        if not self._is_allowed(interaction.user):
+        if not self._is_allowed(interaction.guild, interaction.user):
             await interaction.response.send_message("Bạn không có quyền.", ephemeral=True); return
-        await ch.set_permissions(interaction.guild.default_role, connect=False)
-        db_add_room(str(ch.id), str(self.owner_id), is_hidden=0, is_locked=1)
-        await interaction.response.send_message("Đã khóa room.", ephemeral=True)
+        try:
+            # set @everyone deny connect
+            await ch.set_permissions(interaction.guild.default_role, connect=False)
+            db_add_room(str(ch.id), self.owner_id, is_hidden=0, is_locked=1)
+            await interaction.response.send_message("Đã khóa room.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Lỗi khi khóa: {e}", ephemeral=True)
 
-    @ui.button(label="Unlock room", style=discord.ButtonStyle.success, custom_id="room_unlock")
-    async def unlock(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(label="Unlock room", style=discord.ButtonStyle.success, custom_id="btn_unlock")
+    async def unlock(self, button, interaction: discord.Interaction):
         ch = await self._get_channel(interaction)
         if not ch:
             await interaction.response.send_message("Channel không tồn tại.", ephemeral=True); return
-        if not self._is_allowed(interaction.user):
+        if not self._is_allowed(interaction.guild, interaction.user):
             await interaction.response.send_message("Bạn không có quyền.", ephemeral=True); return
-        await ch.set_permissions(interaction.guild.default_role, connect=True, view_channel=True)
-        db_add_room(str(ch.id), str(self.owner_id), is_hidden=0, is_locked=0)
-        await interaction.response.send_message("Đã mở khóa room.", ephemeral=True)
+        try:
+            await ch.set_permissions(interaction.guild.default_role, connect=True, view_channel=True)
+            db_add_room(str(ch.id), self.owner_id, is_hidden=0, is_locked=0)
+            await interaction.response.send_message("Đã mở khóa room.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Lỗi khi mở khóa: {e}", ephemeral=True)
 
-    @ui.button(label="Hide", style=discord.ButtonStyle.secondary, custom_id="room_hide")
-    async def hide(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(label="Hide", style=discord.ButtonStyle.secondary, custom_id="btn_hide")
+    async def hide(self, button, interaction: discord.Interaction):
         ch = await self._get_channel(interaction)
         if not ch:
             await interaction.response.send_message("Channel không tồn tại.", ephemeral=True); return
-        if not self._is_allowed(interaction.user):
+        if not self._is_allowed(interaction.guild, interaction.user):
             await interaction.response.send_message("Bạn không có quyền.", ephemeral=True); return
-        # hide from everyone
-        await ch.set_permissions(interaction.guild.default_role, view_channel=False, connect=False)
-        # owner & admin & exempt role see it
-        owner_m = interaction.guild.get_member(int(self.owner_id))
-        if owner_m:
-            await ch.set_permissions(owner_m, view_channel=True, connect=True)
-        exempt_role = interaction.guild.get_role(EXEMPT_ROLE_ID)
-        if exempt_role:
-            await ch.set_permissions(exempt_role, view_channel=True, connect=True)
-        db_add_room(str(ch.id), str(self.owner_id), is_hidden=1, is_locked=1)
-        await interaction.response.send_message("Đã ẩn room.", ephemeral=True)
+        try:
+            # hide from everyone
+            await ch.set_permissions(interaction.guild.default_role, view_channel=False, connect=False)
+            # ensure owner and exempt role & admins still can view/join
+            owner_m = interaction.guild.get_member(int(self.owner_id))
+            if owner_m:
+                await ch.set_permissions(owner_m, view_channel=True, connect=True)
+            ex_role = interaction.guild.get_role(EXEMPT_ROLE_ID)
+            if ex_role:
+                await ch.set_permissions(ex_role, view_channel=True, connect=True)
+            db_add_room(str(ch.id), self.owner_id, is_hidden=1, is_locked=1)
+            await interaction.response.send_message("Đã ẩn room (chỉ admin/exempt/owner thấy).", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Lỗi khi ẩn: {e}", ephemeral=True)
 
-    @ui.button(label="Invite", style=discord.ButtonStyle.primary, custom_id="room_invite")
-    async def invite(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(label="Invite", style=discord.ButtonStyle.primary, custom_id="btn_invite")
+    async def invite(self, button, interaction: discord.Interaction):
         ch = await self._get_channel(interaction)
         if not ch:
             await interaction.response.send_message("Channel không tồn tại.", ephemeral=True); return
-        if not self._is_allowed(interaction.user):
+        if not self._is_allowed(interaction.guild, interaction.user):
             await interaction.response.send_message("Bạn không có quyền.", ephemeral=True); return
         modal = InviteModal(self.voice_id)
         await interaction.response.send_modal(modal)
 
 # -------------------------
-# SALARY / PRF / IO / DNT / PRF commands
+# Salary / PRF / IO / DNT
 # -------------------------
-
 @bot.command()
 async def luong(ctx, member: discord.Member = None):
-    """
-    !luong => DM to invoker with pastel-pink embed (Giờ book, Lương giờ, Donate, Lương tổng)
-    !luong @user => admin only, admin receives DM for that user
-    """
-    if member and not is_admin(ctx.author):
-        await ctx.reply("Bạn không có quyền xem lương người khác.", delete_after=8)
-        return
+    # if member set, only admin or exempt role can view other's luong
+    if member and not (is_admin(ctx.author) or any(r.id == EXEMPT_ROLE_ID for r in ctx.author.roles)):
+        return await ctx.reply("Bạn không có quyền xem lương người khác.", delete_after=8)
     target = member or ctx.author
     u = db_get_user(str(target.id))
     hours = int(u["book_hours"])
     donate = int(u["donate"])
-    pay_from_hours = hours * LUONG_GIO_RATE
-    total = pay_from_hours + donate
+    pay_h = hours * LUONG_GIO_RATE
+    total = pay_h + donate
     embed = Embed(title=f"Lương của {target.display_name}", color=PASTEL_PINK)
     embed.add_field(name="Giờ book:", value=f"{hours} giờ", inline=False)
-    embed.add_field(name="Lương giờ:", value=f"{fmt_vnd(pay_from_hours)}", inline=False)
+    embed.add_field(name="Lương giờ:", value=f"{fmt_vnd(pay_h)}", inline=False)
     embed.add_field(name="Donate:", value=f"{fmt_vnd(donate)}", inline=False)
     embed.add_field(name="Lương tổng:", value=f"{fmt_vnd(total)}", inline=False)
+    # send DM to invoker (or admin who requested)
     try:
         await ctx.author.send(embed=embed)
     except:
-        await ctx.reply("Không thể gửi DM — bật tin nhắn riêng để nhận lương.", delete_after=8)
+        await ctx.reply("Không thể gửi DM — bật DM để nhận lương.", delete_after=8)
     try:
         if ctx.channel.type != discord.ChannelType.private:
             await ctx.message.delete()
@@ -464,56 +516,49 @@ async def luong(ctx, member: discord.Member = None):
         pass
 
 @bot.command()
-async def prf(ctx):
-    """Show PRF for caller (Giờ đã book, Donate)"""
-    p = db_prf_get(str(ctx.author.id))
-    ph = int(p["prf_hours"])
-    pd = int(p["prf_donate"])
-    embed = Embed(title="Profile (PRF)", color=PASTEL_PINK)
-    embed.add_field(name="Giờ đã book:", value=f"{ph} giờ", inline=False)
-    embed.add_field(name="Donate:", value=f"{fmt_vnd(pd)}", inline=False)
+async def prf(ctx, member: discord.Member = None):
+    # prf viewable by anyone; if member provided view that member's prf
+    target = member or ctx.author
+    p = db_prf_get(str(target.id))
+    embed = Embed(title=f"PRF của {target.display_name}", color=PASTEL_PINK)
+    embed.add_field(name="Giờ đã book:", value=f"{int(p['prf_hours'])} giờ", inline=False)
+    embed.add_field(name="Donate:", value=f"{fmt_vnd(p['prf_donate'])}", inline=False)
+    await ctx.send(embed=embed)
     try:
-        await ctx.author.send(embed=embed)
-    except:
-        await ctx.reply("Không thể gửi DM.", delete_after=8)
-    try:
-        if ctx.channel.type != discord.ChannelType.private:
-            await ctx.message.delete()
+        await ctx.message.delete()
     except:
         pass
 
 @bot.command(name="io")
 async def cmd_io(ctx, *, raw: str):
     """
-    Formats accepted:
-    - !io 2h @target
-    - !io 2h @target by @actor
+    Accept:
+    !io 2h @target
+    !io 2h @target by @actor
     Behavior:
-    - first mentioned user (target) -> add to luong.book_hours
-    - second mentioned user (actor) -> add to prf.prf_hours
-    - send log message only: "<@target> : <hours> giờ"
+    - first mention -> add to user.book_hours (luong)
+    - second mention -> add to prf.prf_hours (silent)
+    - Log sends: "<@target> : <hours> giờ" to CHANNEL_IO_DNT
     """
     if not has_io_permission(ctx.author):
         return await ctx.reply("Bạn không có quyền dùng lệnh này.", delete_after=8)
-    # parse time token at start
     parts = raw.split()
     if not parts:
         return await ctx.reply("Sai cú pháp. VD: !io 2h @target [by @actor]", delete_after=8)
     time_token = parts[0]
     m = re.match(r"^(\d+)(?:\.\d+)?h$", time_token.lower())
     if not m:
-        return await ctx.reply("Sai format thời gian. Ví dụ: 2h", delete_after=8)
+        return await ctx.reply("Sai format time. VD: 2h", delete_after=8)
     hours = int(m.group(1))
     mentions = re.findall(r'<@!?(\d+)>', raw)
     if len(mentions) < 1:
         return await ctx.reply("Cần tag target.", delete_after=8)
     target_id = mentions[0]
     actor_id = mentions[1] if len(mentions) >= 2 else None
-    # update target book_hours
+    # update luong target
     t = db_get_user(str(target_id))
-    new_hours = int(t["book_hours"]) + hours
-    db_update_user(str(target_id), book_hours=new_hours)
-    # update PRF for actor if provided (silent)
+    db_update_user(str(target_id), book_hours=int(t["book_hours"]) + hours)
+    # update prf actor silently
     if actor_id:
         db_prf_add_hours(str(actor_id), hours)
     # log only target
@@ -531,13 +576,13 @@ async def cmd_io(ctx, *, raw: str):
 @bot.command(name="dnt")
 async def cmd_dnt(ctx, *, raw: str):
     """
-    Formats:
-    - !dnt 20000 @target
-    - !dnt 20000 @target by @actor
+    Accept:
+    !dnt 20000 @target
+    !dnt 20000 @target by @actor
     Behavior:
-    - target gets donate added to luong
-    - actor gets donate added to prf (silent)
-    - log only: "<@target> : <amount>"
+    - first mention target -> donate added to luong
+    - second mention actor -> donate added to prf (silent)
+    - Log sends: "<@target> : <amount>"
     """
     if not has_io_permission(ctx.author):
         return await ctx.reply("Bạn không có quyền dùng lệnh này.", delete_after=8)
@@ -550,14 +595,10 @@ async def cmd_dnt(ctx, *, raw: str):
         return await ctx.reply("Cần tag target.", delete_after=8)
     target_id = mentions[0]
     actor_id = mentions[1] if len(mentions) >= 2 else None
-    # update target donate
     u = db_get_user(str(target_id))
-    new_d = int(u["donate"]) + amount
-    db_update_user(str(target_id), donate=new_d)
-    # update PRF donate for actor (silent)
+    db_update_user(str(target_id), donate=int(u["donate"]) + amount)
     if actor_id:
         db_prf_add_donate(str(actor_id), amount)
-    # log only target
     ch = bot.get_channel(CHANNEL_IO_DNT)
     if ch:
         try:
@@ -569,49 +610,313 @@ async def cmd_dnt(ctx, *, raw: str):
     except:
         pass
 
+# -------------------------
+# POST commands (!post fm and !post m)
+# -------------------------
+class RentDoneView(ui.View):
+    @ui.button(label="Done", style=discord.ButtonStyle.danger)
+    async def done(self, interaction: discord.Interaction, button: ui.Button):
+        # delete the channel if user presses Done (only allowed for channel creator or admin)
+        try:
+            # only allow channel owner or admin
+            if interaction.channel and (interaction.user.guild_permissions.administrator or interaction.channel.name == interaction.user.name):
+                try:
+                    await interaction.channel.delete()
+                except:
+                    pass
+                await interaction.response.send_message("Channel đã xóa.", ephemeral=True)
+            else:
+                await interaction.response.send_message("Bạn không có quyền xóa channel này.", ephemeral=True)
+        except Exception:
+            await interaction.response.send_message("Lỗi.", ephemeral=True)
+
+class RentView(ui.View):
+    def __init__(self, embed:Embed, image_file, owner:discord.Member):
+        super().__init__(timeout=None)
+        self.embed = embed
+        self.image_file = image_file
+        self.owner = owner
+
+    @ui.button(label="Rent", style=discord.ButtonStyle.primary)
+    async def rent(self, interaction: discord.Interaction, button: ui.Button):
+        member = interaction.user
+        guild = interaction.guild
+        # Create private text channel in RENT_CATEGORY_ID with name = username
+        category = discord.utils.get(guild.categories, id=RENT_CATEGORY_ID)
+        name = f"{member.name}"
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+            member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.get_member(ADMIN_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        try:
+            temp_channel = await guild.create_text_channel(name=name, overwrites=overwrites, category=category, reason="Rent created")
+        except:
+            # fallback: create without category
+            temp_channel = await guild.create_text_channel(name=name, overwrites=overwrites, reason="Rent created")
+        # send embed + image + greeting message in that channel
+        try:
+            await temp_channel.send(embed=self.embed, file=self.image_file)
+        except:
+            # if file was already used, send embed only
+            await temp_channel.send(embed=self.embed)
+        await temp_channel.send("Khách ơi đợi tí, bọn mình rep liền nhaaa ₊˚⊹ ᰔ")
+        # Send Done button view in temp channel
+        await temp_channel.send("Nhấn Done khi hoàn tất đơn:", view=RentDoneView())
+        # respond ephemeral to clicker
+        await interaction.response.send_message(f"Đã tạo channel {temp_channel.mention}", ephemeral=True)
+
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def reset_all(ctx):
+async def post(ctx, kind: str, *, caption: str = ""):
     """
-    Reset all users' book_hours and donate (and PRF table)
-    No notification should be sent.
+    Usage:
+    !post fm <caption>    -> posts into IMAGE_CHANNEL_FEMALE
+    !post m <caption>     -> posts into IMAGE_CHANNEL_MALE
     """
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET book_hours=0, donate=0, in_time=NULL")
-    cur.execute("DELETE FROM prf")
-    conn.commit()
-    conn.close()
+    if kind.lower() not in ("fm","m"):
+        return await ctx.reply("Sai cú pháp. Dùng `!post fm` hoặc `!post m`", delete_after=6)
+    if len(ctx.message.attachments) == 0:
+        return await ctx.reply("Bạn chưa gửi ảnh kèm message!", delete_after=6)
+    attachment = ctx.message.attachments[0]
+    image_file = await attachment.to_file()
+    embed = Embed(description=caption, color=PASTEL_PINK)
+    embed.set_image(url=f"attachment://{attachment.filename}")
+    channel = bot.get_channel(IMAGE_CHANNEL_FEMALE if kind.lower()=="fm" else IMAGE_CHANNEL_MALE)
+    if not channel:
+        return await ctx.reply("Không tìm thấy channel ảnh.", delete_after=6)
+    view = RentView(embed, image_file, ctx.author)
+    await channel.send(embed=embed, file=image_file, view=view)
     try:
         await ctx.message.delete()
     except:
         pass
 
 # -------------------------
-# MISC Utilities
+# Code creation/edit/delete
+# -------------------------
+class CodeModal(ui.Modal):
+    title_field = ui.TextInput(label="Tiêu đề", required=True)
+    user_field = ui.TextInput(label="@user (mention)", required=True, placeholder="@user")
+    content_field = ui.TextInput(label="Nội dung", style=discord.TextStyle.long, required=True)
+    def __init__(self, existing_title=None):
+        super().__init__(title="Tạo / Sửa code")
+        self.existing_title = existing_title
+
+    async def on_submit(self, interaction: discord.Interaction):
+        title = self.title_field.value.strip()
+        user_text = self.user_field.value.strip()
+        mentions = re.findall(r'<@!?(\d+)>', user_text)
+        if not mentions:
+            await interaction.response.send_message("Không tìm thấy mention trong trường @user.", ephemeral=True); return
+        target_id = mentions[0]
+        content = self.content_field.value.strip()
+        # find image from the interaction message attachments is not straightforward;
+        # We'll check the original message that triggered the modal via interaction.channel.history (best-effort)
+        image_url = None
+        # Save code template
+        db_save_code(title, str(target_id), content, image_url)
+        await interaction.response.send_message("Đã lưu template.", ephemeral=True)
+
+@bot.command()
+async def code(ctx):
+    # open modal to create code
+    # only admins and exempt role allowed to create/edit/delete
+    allowed = is_admin(ctx.author) or any(r.id == EXEMPT_ROLE_ID for r in ctx.author.roles)
+    if not allowed:
+        return await ctx.reply("Bạn không có quyền tạo code.", delete_after=8)
+    modal = CodeModal()
+    try:
+        await ctx.send("Mở form tạo code...", delete_after=2)
+        # In message command context, opening modal requires an interaction; as fallback we try to send guidance
+        # Best-effort: send modal via ephemeral response if possible; else ask user to use slash command
+        # Here we'll attempt to open modal via ctx.interaction if exists.
+        if hasattr(ctx, "interaction") and ctx.interaction:
+            await ctx.interaction.response.send_modal(modal)
+        else:
+            # fallback: ask to use slash or send manual directive
+            await ctx.author.send("Vui lòng dùng hỗ trợ modal (nếu client hỗ trợ).")
+    except Exception:
+        await ctx.author.send("Không thể mở modal trong ngữ cảnh này. Dùng slash hoặc UI hỗ trợ modal.")
+
+@bot.command()
+async def code_edit(ctx, *, args: str):
+    # format: !code edit <title>
+    allowed = is_admin(ctx.author) or any(r.id == EXEMPT_ROLE_ID for r in ctx.author.roles)
+    if not allowed:
+        return await ctx.reply("Bạn không có quyền sửa code.", delete_after=8)
+    m = re.match(r"^(\S+)", args.strip())
+    if not m:
+        return await ctx.reply("Sai cú pháp. VD: !code edit <title>", delete_after=8)
+    title = m.group(1)
+    # open modal with existing content prefilled if exists
+    data = db_get_code_by_title(title)
+    modal = CodeModal(existing_title=title)
+    if data:
+        modal.title_field.default = data["title"]
+        modal.user_field.default = f"<@{data['target_user_id']}>"
+        modal.content_field.default = data["content"]
+    try:
+        if hasattr(ctx, "interaction") and ctx.interaction:
+            await ctx.interaction.response.send_modal(modal)
+        else:
+            await ctx.author.send("Không thể mở modal trong ngữ cảnh này. Dùng slash.")
+    except:
+        await ctx.author.send("Không thể mở modal.")
+
+@bot.command()
+async def code_delete(ctx, member: discord.Member = None):
+    # per request: !code delete @user deletes code associated to that @user
+    allowed = is_admin(ctx.author) or any(r.id == EXEMPT_ROLE_ID for r in ctx.author.roles)
+    if not allowed:
+        return await ctx.reply("Bạn không có quyền xóa code.", delete_after=8)
+    if not member:
+        return await ctx.reply("Cần @user để xóa code liên kết.", delete_after=8)
+    db_delete_code_by_user_id(str(member.id))
+    await ctx.reply(f"Đã xóa code liên kết với {member.display_name}.", delete_after=6)
+
+# Listening for message equal to a saved code title
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    # first pass process commands
+    await bot.process_commands(message)
+    # check if message content equals a code title
+    title = message.content.strip()
+    if not title:
+        return
+    data = db_get_code_by_title(title)
+    if data:
+        # send @user content + image if exists
+        try:
+            target_id = data["target_user_id"]
+            content = data["content"]
+            image_url = data["image_url"]
+            mention = f"<@{target_id}>"
+            if image_url:
+                embed = Embed(description=f"{mention} {content}", color=PASTEL_PINK)
+                embed.set_image(url=image_url)
+                await message.channel.send(embed=embed)
+            else:
+                await message.channel.send(f"{mention} {content}")
+        except Exception as e:
+            print("code send error:", e)
+
+# -------------------------
+# Giveaway (modal + reaction)
+# -------------------------
+class GiveawayModal(ui.Modal):
+    title = ui.TextInput(label="Tiêu đề", required=True)
+    winners = ui.TextInput(label="Số winners", required=True, placeholder="1")
+    end = ui.TextInput(label="Thời lượng (1h30m)", required=True, placeholder="1h30m")
+    host_user = ui.TextInput(label="Hosted by (mention) - optional", required=False, placeholder="@user")
+    def __init__(self, channel):
+        super().__init__(title="Tạo Giveaway")
+        self.channel = channel
+    async def on_submit(self, interaction: discord.Interaction):
+        title = self.title.value.strip()
+        try:
+            winners = int(self.winners.value.strip())
+        except:
+            await interaction.response.send_message("Winners phải là số.", ephemeral=True); return
+        end_str = self.end.value.strip()
+        host_text = self.host_user.value.strip()
+        # parse end_str
+        matches = re.findall(r'(\d+)([smhd])', end_str)
+        total_seconds = 0
+        for qty, unit in matches:
+            q = int(qty)
+            if unit == 's': total_seconds += q
+            elif unit == 'm': total_seconds += q*60
+            elif unit == 'h': total_seconds += q*3600
+            elif unit == 'd': total_seconds += q*86400
+        if total_seconds <= 0:
+            await interaction.response.send_message("Thời gian không hợp lệ.", ephemeral=True); return
+        # hosted by handle
+        host_id = None
+        if host_text:
+            h = re.findall(r'<@!?(\d+)>', host_text)
+            if h:
+                host_id = h[0]
+        if not host_id:
+            host_id = "1432668389943410780"  # default as you asked
+        end_at = datetime.now(VN_TZ) + timedelta(seconds=total_seconds)
+        embed = Embed(title=f"🎉 Giveaway: {title}", description=f"Hosted by: <@{host_id}>\nWinners: {winners}\nEnds at: {end_at.strftime('%Y-%m-%d %H:%M:%S')}", color=PASTEL_PINK)
+        msg = await self.channel.send(embed=embed)
+        await msg.add_reaction("🎉")
+        # store giveaway
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        cur.execute("INSERT INTO giveaways(channel_id, message_id, title, winners, host_id, end_at, ended) VALUES (?,?,?,?,?,?,0)",
+                    (str(self.channel.id), str(msg.id), title, winners, str(host_id), end_at.strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("Đã tạo giveaway!", ephemeral=True)
+        # schedule draw
+        async def wait_and_draw():
+            await asyncio.sleep(total_seconds)
+            try:
+                gmsg = await self.channel.fetch_message(msg.id)
+                users = set()
+                for react in gmsg.reactions:
+                    if react.emoji == "🎉":
+                        async for u in react.users():
+                            if not u.bot:
+                                users.add(u.id)
+                winners_list = []
+                if users:
+                    winners_list = random.sample(list(users), min(len(users), winners))
+                announce = f"🎊 Giveaway ended! Winners: {', '.join(f'<@{w}>' for w in winners_list) if winners_list else 'No participants.'}"
+                await self.channel.send(announce)
+            except Exception as e:
+                print("giveaway draw error:", e)
+        bot.loop.create_task(wait_and_draw())
+
+@bot.command()
+async def gw(ctx):
+    # open giveaway modal; delete the invoking message (per your request)
+    allowed = True  # anyone can create? You asked earlier that hosted by can be chosen; we allow msg author to create
+    modal = GiveawayModal(ctx.channel)
+    try:
+        # delete invoking message to keep only embed visible
+        try:
+            await ctx.message.delete()
+        except:
+            pass
+        if hasattr(ctx, "interaction") and ctx.interaction:
+            await ctx.interaction.response.send_modal(modal)
+        else:
+            # try to send DM with link to modal not possible; show fallback
+            await ctx.send("Mở form tạo giveaway... (nếu client hỗ trợ modal nó sẽ xuất hiện).", delete_after=5)
+    except Exception:
+        await ctx.send("Không thể mở modal trong ngữ cảnh này.")
+
+# -------------------------
+# Utilities: clear, av, ban, mute, rd, choose
 # -------------------------
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: str):
-    """!clear <n> or !clear all"""
     if amount == "all":
         try:
             await ctx.channel.purge()
-        except Exception:
-            await ctx.send("Không xóa được tất cả.", delete_after=5)
-        try: await ctx.message.delete()
-        except: pass
+        except:
+            await ctx.send("Không thể xóa tất cả.", delete_after=6)
+        try:
+            await ctx.message.delete()
+        except:
+            pass
         return
     if not amount.isdigit():
         return await ctx.reply("Sai cú pháp. VD: !clear 3", delete_after=6)
     n = int(amount)
     if n <= 0:
-        return await ctx.reply("Số phải lớn hơn 0.", delete_after=6)
+        return await ctx.reply("Số phải >0", delete_after=6)
     try:
-        # include command message -> delete n+1
         await ctx.channel.purge(limit=n+1)
-    except Exception:
-        await ctx.send("Không thể xóa.", delete_after=5)
+    except:
+        await ctx.send("Không thể xóa.", delete_after=6)
 
 @bot.command()
 async def av(ctx, member: discord.Member = None):
@@ -632,11 +937,10 @@ async def ban(ctx, member: discord.Member = None):
         await member.ban(reason=f"Banned by {ctx.author}")
         await ctx.send(f"Đã ban {member.mention}")
     except Exception:
-        await ctx.send("Lỗi khi ban.")
+        await ctx.send("Lỗi khi ban.", delete_after=6)
 
 @bot.command()
 async def mute(ctx, time: str = None, member: discord.Member = None):
-    # only admin or exempt role allowed
     allowed = is_admin(ctx.author) or any(r.id == EXEMPT_ROLE_ID for r in ctx.author.roles)
     if not allowed:
         return await ctx.reply("Bạn không có quyền mute.", delete_after=8)
@@ -645,23 +949,23 @@ async def mute(ctx, time: str = None, member: discord.Member = None):
         await ctx.send(embed=embed)
         return
     if not time:
-        return await ctx.reply("Thiếu thời gian. VD: !mute 1m @user", delete_after=8)
+        return await ctx.reply("Thiếu thời gian VD: !mute 1m @user", delete_after=8)
     m = re.match(r"^(\d+)([smhd])$", time.lower())
     if not m:
-        return await ctx.reply("Sai định dạng thời gian. VD: 1m, 1h", delete_after=8)
+        return await ctx.reply("Sai format thời gian.", delete_after=8)
     qty = int(m.group(1)); unit = m.group(2)
     seconds = qty * (1 if unit == 's' else 60 if unit == 'm' else 3600 if unit == 'h' else 86400)
     guild = ctx.guild
-    muted_role = discord.utils.get(guild.roles, name="Muted")
-    if not muted_role:
-        muted_role = await guild.create_role(name="Muted")
+    muted = discord.utils.get(guild.roles, name="Muted")
+    if not muted:
+        muted = await guild.create_role(name="Muted")
         for ch in guild.channels:
             try:
-                await ch.set_permissions(muted_role, send_messages=False, speak=False, add_reactions=False)
+                await ch.set_permissions(muted, send_messages=False, speak=False, add_reactions=False)
             except:
                 pass
     try:
-        await member.add_roles(muted_role, reason=f"Muted by {ctx.author} for {time}")
+        await member.add_roles(muted, reason=f"Muted by {ctx.author} for {time}")
     except:
         pass
     try:
@@ -671,145 +975,23 @@ async def mute(ctx, time: str = None, member: discord.Member = None):
     async def unmute_later():
         await asyncio.sleep(seconds)
         try:
-            await member.remove_roles(muted_role, reason="Auto unmute")
+            await member.remove_roles(muted, reason="Auto unmute")
         except:
             pass
     bot.loop.create_task(unmute_later())
 
 @bot.command()
 async def rd(ctx):
-    num = random.randint(1, 999)
-    await ctx.send(f"Random: {num}")
+    n = random.randint(1, 999)
+    await ctx.send(f"Random: {n}")
 
 @bot.command()
 async def choose(ctx, *, options: str):
     parts = options.split()
     if not parts:
-        return await ctx.reply("Cần ít nhất 1 lựa chọn.")
-    choice = random.choice(parts)
-    await ctx.send(f"Chọn: **{choice}**")
-
-# -------------------------
-# GIVEAWAY (simple)
-# -------------------------
-class GiveawayModal(ui.Modal):
-    title = ui.TextInput(label="Tiêu đề giveaway", required=True)
-    winners = ui.TextInput(label="Số người thắng", required=True, placeholder="1")
-    end = ui.TextInput(label="Thời lượng (vd: 1h30m)", required=True, placeholder="1h30m")
-    def __init__(self, channel):
-        super().__init__(title="Tạo Giveaway")
-        self.channel = channel
-    async def on_submit(self, interaction: discord.Interaction):
-        title = self.title.value.strip()
-        try:
-            winners = int(self.winners.value.strip())
-        except:
-            await interaction.response.send_message("Winners phải là số.", ephemeral=True); return
-        end_str = self.end.value.strip()
-        # parse time string (supports h/m/s/d)
-        matches = re.findall(r'(\d+)([smhd])', end_str)
-        total_seconds = 0
-        for qty, unit in matches:
-            q = int(qty)
-            if unit == 's': total_seconds += q
-            elif unit == 'm': total_seconds += q*60
-            elif unit == 'h': total_seconds += q*3600
-            elif unit == 'd': total_seconds += q*86400
-        if total_seconds <= 0:
-            await interaction.response.send_message("Thời gian không hợp lệ.", ephemeral=True); return
-        end_at = datetime.now(VN_TZ) + timedelta(seconds=total_seconds)
-        embed = Embed(title=f"🎉 Giveaway: {title}", description=f"Hosted by: {interaction.user.mention}\nWinners: {winners}\nEnds at: {end_at.strftime('%Y-%m-%d %H:%M:%S')}", color=PASTEL_PINK)
-        msg = await self.channel.send(embed=embed)
-        await msg.add_reaction("🎉")
-        # store giveaway
-        conn = sqlite3.connect(DB_FILE)
-        cur = conn.cursor()
-        cur.execute("INSERT INTO giveaways(channel_id, message_id, title, winners, host_id, end_at, ended) VALUES (?,?,?,?,?,?,0)",
-                    (str(self.channel.id), str(msg.id), title, winners, str(interaction.user.id), end_at.strftime("%Y-%m-%d %H:%M:%S")))
-        conn.commit()
-        conn.close()
-        await interaction.response.send_message("Đã tạo giveaway!", ephemeral=True)
-        async def wait_and_draw():
-            await asyncio.sleep(total_seconds)
-            try:
-                gmsg = await self.channel.fetch_message(msg.id)
-                users = set()
-                for react in gmsg.reactions:
-                    if react.emoji == "🎉":
-                        async for u in react.users():
-                            if not u.bot:
-                                users.add(u.id)
-                users = list(users)
-                winners_list = []
-                if users:
-                    winners_list = random.sample(users, min(len(users), winners))
-                announce = f"🎊 Giveaway ended! Winners: {', '.join(f'<@{w}>' for w in winners_list) if winners_list else 'No participants.'}"
-                await self.channel.send(announce)
-            except Exception as e:
-                print("giveaway draw error", e)
-        bot.loop.create_task(wait_and_draw())
-
-@bot.command()
-async def gw(ctx):
-    modal = GiveawayModal(ctx.channel)
-    # In message context modals may not open; we attempt to respond
-    try:
-        await ctx.send("Mở form tạo giveaway (check DM/modal)...", delete_after=3)
-        await ctx.interaction.response.send_modal(modal) if hasattr(ctx, "interaction") else await ctx.send("Vui lòng dùng slash hoặc hỗ trợ modal.")
-    except:
-        try:
-            await ctx.send("Mở form tạo giveaway...") 
-        except:
-            pass
-
-# -------------------------
-# POST / RENT (1:1 image embed) adjustments
-# -------------------------
-class RentDoneView(ui.View):
-    @ui.button(label="Done", style=discord.ButtonStyle.danger)
-    async def done(self, interaction: discord.Interaction, button: ui.Button):
-        # delete the channel where called if allowed
-        try:
-            await interaction.channel.delete()
-        except:
-            await interaction.response.send_message("Không thể xóa channel.", ephemeral=True)
-
-@bot.command()
-async def post(ctx, gender: str, *, caption: str = ""):
-    if len(ctx.message.attachments) == 0:
-        return await ctx.reply("Bạn chưa gửi ảnh kèm message!", delete_after=6)
-    attachment = ctx.message.attachments[0]
-    image_file = await attachment.to_file()
-    if gender.lower() == "female":
-        channel = bot.get_channel(IMAGE_CHANNEL_FEMALE)
-    elif gender.lower() == "male":
-        channel = bot.get_channel(IMAGE_CHANNEL_MALE)
-    else:
-        return await ctx.reply("Giới tính không hợp lệ! dùng `female` hoặc `male`", delete_after=6)
-    if not channel:
-        return await ctx.reply("Không tìm thấy channel ảnh.", delete_after=6)
-    embed = Embed(description=caption, color=PASTEL_PINK)
-    embed.set_image(url=f"attachment://{attachment.filename}")  # can't force 1:1, user should upload square
-    class RentView(ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-        @ui.button(label="Rent", style=discord.ButtonStyle.primary)
-        async def rent(self, interaction: discord.Interaction, button: ui.Button):
-            member = interaction.user
-            guild = interaction.guild
-            name = f"{member.name}"
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                guild.get_member(ADMIN_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            }
-            temp_channel = await guild.create_text_channel(name=name, overwrites=overwrites)
-            await temp_channel.send(embed=embed, file=image_file, view=RentDoneView())
-            await interaction.response.send_message(f"Đã tạo channel {temp_channel.mention}", ephemeral=True)
-    await channel.send(embed=embed, file=image_file, view=RentView())
-    try: await ctx.message.delete()
-    except: pass
+        return await ctx.reply("Cần ít nhất 1 lựa chọn.", delete_after=6)
+    pick = random.choice(parts)
+    await ctx.send(f"Chọn: **{pick}**")
 
 # -------------------------
 # time / qr / text (pastel)
@@ -818,17 +1000,18 @@ async def post(ctx, gender: str, *, caption: str = ""):
 async def time(ctx, *, t: str):
     t = t.lower().replace(" ", "")
     hours = 0; minutes = 0
-    h_match = re.search(r'(\d+)h', t)
-    m_match = re.search(r'(\d+)m', t)
-    if h_match: hours = int(h_match.group(1))
-    if m_match: minutes = int(m_match.group(1))
+    h = re.search(r'(\d+)h', t)
+    m = re.search(r'(\d+)m', t)
+    if h: hours = int(h.group(1))
+    if m: minutes = int(m.group(1))
     if hours == 0 and minutes == 0:
-        return await ctx.reply("Không nhận diện được thời gian! VD: !time 1h30m, !time 45m", delete_after=6)
-    start = datetime.now(VN_TZ); end = start + timedelta(hours=hours, minutes=minutes)
-    embed = Embed(description=f"⏳ Bắt đầu: **{start.strftime('%H:%M:%S')}** → Kết thúc: **{end.strftime('%H:%M:%S')}**", color=PASTEL_PINK)
+        return await ctx.reply("Không nhận diện thời gian!", delete_after=6)
+    start = datetime.now(VN_TZ)
+    end = start + timedelta(hours=hours, minutes=minutes)
+    embed = Embed(description=f"⏳ Bắt đầu: {start.strftime('%H:%M:%S')} → Kết thúc: {end.strftime('%H:%M:%S')}", color=PASTEL_PINK)
     await ctx.send(embed=embed)
     await asyncio.sleep(hours*3600 + minutes*60)
-    await ctx.send(f"{ctx.author.mention} ⏰ Thời gian kết thúc: **{datetime.now(VN_TZ).strftime('%H:%M:%S')}**")
+    await ctx.send(f"{ctx.author.mention} ⏰ Đã hết giờ")
 
 @bot.command()
 async def qr(ctx):
@@ -854,7 +1037,7 @@ async def text(ctx, *, content: str):
     await ctx.send(embed=embed)
 
 # -------------------------
-# MONTHLY REPORT
+# Monthly report task
 # -------------------------
 @tasks.loop(minutes=10)
 async def monthly_report_task():
@@ -868,7 +1051,7 @@ async def monthly_report_task():
         if not ch:
             db_monthly_mark_sent(ym)
             return
-        header = f"📊 **Báo cáo lương tháng {now.strftime('%Y-%m')}**\nLương giờ = {fmt_vnd(LUONG_GIO_RATE)}/giờ\n\n"
+        header = f"📊 Báo cáo lương tháng {now.strftime('%Y-%m')}\nLương giờ = {fmt_vnd(LUONG_GIO_RATE)}/giờ\n\n"
         msg = header
         for uid, hours, donate in rows:
             pay = int(hours) * LUONG_GIO_RATE
@@ -880,31 +1063,29 @@ async def monthly_report_task():
         db_monthly_mark_sent(ym)
 
 # -------------------------
-# ON_READY
+# on_ready
 # -------------------------
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (id: {bot.user.id})")
+    print(f"Bot running as {bot.user} (id: {bot.user.id})")
     if not monthly_report_task.is_running():
         monthly_report_task.start()
 
 # -------------------------
-# ERROR HANDLING
+# error handler
 # -------------------------
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        try:
-            await ctx.message.delete()
-        except:
-            pass
+        try: await ctx.message.delete()
+        except: pass
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Thiếu tham số.", delete_after=6)
     else:
         print("Command error:", error)
 
 # -------------------------
-# RUN
+# Run bot
 # -------------------------
 if __name__ == "__main__":
     bot.run(TOKEN)
