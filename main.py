@@ -1,18 +1,18 @@
 import discord
 from discord.ext import commands
-from discord import Embed, FFmpegPCMAudio, ui, File
+from discord import Embed, ui, File
 from flask import Flask
 from threading import Thread
 import asyncio
 from datetime import datetime, timedelta
 import re
 import os
-import yt_dlp
+import json
 import requests
-import pytz # Thư viện để quản lý múi giờ
+import pytz
 
 # -----------------------
-# Flask server để ping 24/7 (Không cần thay đổi)
+# Flask server để ping 24/7 (Replit)
 app = Flask('')
 
 @app.route('/')
@@ -20,26 +20,23 @@ def home():
     return "Bot is running!"
 
 def run():
-    # Sử dụng port từ biến môi trường nếu có, nếu không mặc định 8080
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Bắt đầu server Flask trong một luồng riêng
 Thread(target=run).start()
 # -----------------------
 
 # Bot setup
-# Lấy TOKEN từ biến môi trường (BẮT BUỘC KHI TRIỂN KHAI)
 TOKEN = os.getenv('DISCORD_BOT_SECRET')
 if not TOKEN:
-    print("LỖI: Thiếu biến môi trường 'DISCORD_BOT_SECRET'. Không thể chạy bot.")
+    print("LỖI: Thiếu DISCORD_BOT_SECRET.")
     exit()
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # -----------------------
-# Cấu hình channel ID và admin
+# Channel ID + Admin
 WELCOME_CHANNEL_ID = 1432659040680284191
 SUPPORT_CHANNEL_ID = 1432685282955755595
 IMAGE_CHANNEL_FEMALE = 1432691499094769704
@@ -47,161 +44,185 @@ IMAGE_CHANNEL_MALE = 1432691597363122357
 ADMIN_ID = 757555763559399424
 
 # -----------------------
-# CODE PING 24/7
-HC_PING_URL = os.getenv('HEALTHCHECKS_URL') # Lấy URL Ping từ biến môi trường
+# KEEP ALIVE (Healthcheck)
+HC_PING_URL = os.getenv('HEALTHCHECKS_URL')
 
 async def keep_alive_ping():
     if not HC_PING_URL:
         return
-    
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
             requests.get(HC_PING_URL, timeout=10)
         except Exception as e:
-            print(f"Lỗi khi ping Healthchecks.io: {e}")
-        
-        await asyncio.sleep(14 * 60) # Chờ 14 phút
+            print("Ping error:", e)
+        await asyncio.sleep(14 * 60)
 
 @bot.event
 async def on_ready():
-    print(f'Bot đã đăng nhập như {bot.user}')
+    print(f'Bot đang chạy: {bot.user}')
     if HC_PING_URL:
         bot.loop.create_task(keep_alive_ping())
 
 # -----------------------
+# Welcome event
 @bot.event
 async def on_member_join(member):
     channel = bot.get_channel(WELCOME_CHANNEL_ID)
     if channel:
         await channel.send(
-            f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆, mong bạn ở đây thật vui nhá ^^ "
-            f"Có cần hỗ trợ gì thì <#{SUPPORT_CHANNEL_ID}> nhá"
+            f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆ "
+            f"Nếu cần hỗ trợ vào <#{SUPPORT_CHANNEL_ID}> nha!"
         )
 
-# -----------------------
-# Music player
-ytdl_format_options = {
-    'format': 'bestaudio/best',
-    'noplaylist': False,
-    'quiet': True,
-}
-# Đảm bảo ffmpeg_options được thiết lập
-ffmpeg_options = {'options': '-vn'} 
-ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-music_queue = {}
+# =====================================================
+# 📌 PHẦN QUẢN LÝ LƯƠNG – JSON
+# =====================================================
 
-def ensure_queue(guild_id):
-    if guild_id not in music_queue:
-        music_queue[guild_id] = []
+DATA_FILE = "luong.json"
 
-async def play_next(ctx, voice_client):
-    guild_id = ctx.guild.id
-    ensure_queue(guild_id)
-    if len(music_queue[guild_id]) == 0:
-        await asyncio.sleep(60) 
-        if len(music_queue[guild_id]) == 0:
-             await voice_client.disconnect()
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=4)
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+def ensure_user(uid):
+    data = load_data()
+    if uid not in data:
+        data[uid] = {
+            "book_hours": 0,
+            "donate": 0,
+            "luong_gio": 0,
+        }
+        save_data(data)
+
+# =====================================================
+# 📌 LỆNH !luong — XEM LƯƠNG
+# =====================================================
+
+@bot.command()
+async def luong(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    uid = str(member.id)
+
+    ensure_user(uid)
+    data = load_data()[uid]
+
+    luong_tong = (data["book_hours"] * data["luong_gio"]) + data["donate"]
+
+    embed = Embed(
+        title=f"💰 Bảng lương của {member.display_name}",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Giờ book:", value=f"{data['book_hours']} giờ", inline=False)
+    embed.add_field(name="Donate:", value=f"{data['donate']} đ", inline=False)
+    embed.add_field(name="Lương giờ:", value=f"{data['luong_gio']} đ/giờ", inline=False)
+    embed.add_field(name="Lương tổng:", value=f"{luong_tong} đ", inline=False)
+
+    await ctx.send(embed=embed)
+
+# =====================================================
+# 📌 LỆNH !inout — THÊM GIỜ BOOK
+# =====================================================
+
+@bot.command()
+async def inout(ctx, hours: float, luong_gio: int = None):
+    uid = str(ctx.author.id)
+    ensure_user(uid)
+
+    data = load_data()
+
+    data[uid]["book_hours"] += hours
+    if luong_gio is not None:
+        data[uid]["luong_gio"] = luong_gio
+
+    save_data(data)
+
+    await ctx.send(
+        f"⏳ Đã ghi nhận **{hours} giờ** cho {ctx.author.mention}.\n"
+        f"💵 Lương giờ hiện tại: **{data[uid]['luong_gio']} đ/giờ**"
+    )
+
+# =====================================================
+# 📌 LỆNH !dnt — THÊM DONATE
+# =====================================================
+
+@bot.command()
+async def dnt(ctx, amount: int):
+    uid = str(ctx.author.id)
+    ensure_user(uid)
+
+    data = load_data()
+    data[uid]["donate"] += amount
+    save_data(data)
+
+    await ctx.send(f"💗 Đã cộng donate **{amount} đ** cho {ctx.author.mention}")
+
+# =====================================================
+# 📌 LỆNH !ban — BAN USER
+# =====================================================
+
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def ban(ctx, member: discord.Member = None):
+    if not member:
+        await ctx.send("❌ Bạn cần tag 1 người để ban. VD: `!ban @user`")
         return
-    
-    url = music_queue[guild_id].pop(0)
-    loop = asyncio.get_event_loop()
+
     try:
-        # Lấy thông tin và URL audio
-        info = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
-        # Sử dụng URL trực tiếp từ info
-        audio_url = info.get('url') or info['formats'][0]['url'] 
-        source = FFmpegPCMAudio(audio_url, **ffmpeg_options)
-        voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop))
+        await member.ban(reason=f"Banned by {ctx.author}")
+        await ctx.send(f"🔨 Đã ban {member.mention}.")
     except Exception as e:
-        print(f"Lỗi phát nhạc: {e}")
-        await ctx.send(f"❌ Lỗi khi phát bài hát: {e}")
-        asyncio.run_coroutine_threadsafe(play_next(ctx, voice_client), bot.loop) # Thử phát bài tiếp theo
+        await ctx.send(f"❌ Lỗi khi ban: {e}")
+
+# =====================================================
+# 📌 LỆNH !banrole — BAN TẤT CẢ USER TRONG ROLE
+# =====================================================
 
 @bot.command()
-async def play(ctx, *, url):
-    if not ctx.author.voice or not ctx.author.voice.channel:
-        await ctx.send("Bạn cần vào voice channel trước!")
-        return
-    
-    # Thêm check chặn lặp lại lệnh
-    if ctx.message.author.id == bot.user.id:
+@commands.has_permissions(ban_members=True)
+async def banrole(ctx, role: discord.Role = None):
+    if not role:
+        await ctx.send("❌ Cần nhập role. VD `!banrole Player`")
         return
 
-    channel = ctx.author.voice.channel
-    voice_client = ctx.voice_client
-    if not voice_client:
-        voice_client = await channel.connect()
-    
-    guild_id = ctx.guild.id
-    ensure_queue(guild_id)
-    
-    # Logic phát/thêm vào queue
-    if voice_client.is_playing() or voice_client.is_paused() or len(music_queue[guild_id]) > 0:
-        music_queue[guild_id].append(url)
-        await ctx.send(f"Đã thêm vào queue: {url}")
-    else:
-        music_queue[guild_id].append(url)
-        await ctx.send(f"Bắt đầu phát nhạc: {url}")
-        await play_next(ctx, voice_client)
+    count = 0
+    for member in role.members:
+        try:
+            await member.ban(reason=f"Banned by {ctx.author} (role ban)")
+            count += 1
+        except:
+            pass
 
-@bot.command()
-async def next(ctx):
-    if ctx.message.author.id == bot.user.id:
-        return
-    voice_client = ctx.voice_client
-    if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
-        voice_client.stop()
-        await ctx.send("Bài tiếp theo...")
-    else:
-        await ctx.send("Bot không phát nhạc.")
+    await ctx.send(f"🔨 Đã ban **{count} thành viên** trong role **{role.name}**.")
 
-@bot.command()
-async def stop(ctx):
-    if ctx.message.author.id == bot.user.id:
-        return
-    voice_client = ctx.voice_client
-    if voice_client:
-        if voice_client.is_playing() or voice_client.is_paused():
-            voice_client.stop()
-        music_queue[ctx.guild.id] = [] 
-        await ctx.send("Ngừng nhạc và xóa hàng đợi.")
+# =====================================================
+# LỆNH EMBED !text
+# =====================================================
 
-@bot.command()
-async def out(ctx):
-    if ctx.message.author.id == bot.user.id:
-        return
-    voice_client = ctx.voice_client
-    if voice_client:
-        music_queue[ctx.guild.id] = [] 
-        await voice_client.disconnect()
-        await ctx.send("Bot đã out voice channel")
-
-# -----------------------
-# Lệnh !text để gửi tin nhắn dưới dạng Embed
 @bot.command()
 async def text(ctx, *, content: str):
-    if ctx.message.author.id == bot.user.id:
-        return
     await ctx.message.delete()
-    
-    embed = discord.Embed(
-        description=content, 
-        color=discord.Color.from_rgb(255, 209, 220) 
-    )
-    embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.avatar.url)
-    
-    await ctx.send(embed=embed)
-# -----------------------
 
-# -----------------------
-# !post kèm attachment + nút Rent + Done
+    embed = discord.Embed(description=content, color=discord.Color.from_rgb(255, 209, 220))
+    embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.avatar.url)
+
+    await ctx.send(embed=embed)
+
+# =====================================================
+# LỆNH !post (Rent System)
+# =====================================================
+
 @bot.command()
 async def post(ctx, gender: str, *, caption: str = ""):
-    if ctx.message.author.id == bot.user.id:
-        return
     if len(ctx.message.attachments) == 0:
-        await ctx.send("❌ Bạn chưa gửi ảnh kèm message!")
+        await ctx.send("❌ Bạn chưa gửi ảnh!")
         return
 
     attachment = ctx.message.attachments[0]
@@ -212,122 +233,67 @@ async def post(ctx, gender: str, *, caption: str = ""):
     else:
         channel = bot.get_channel(IMAGE_CHANNEL_MALE)
 
-    if not channel:
-        await ctx.send("Lỗi: Không tìm thấy channel ảnh.")
-        return
-
     embed = Embed(description=caption)
     embed.set_image(url=f"attachment://{attachment.filename}")
-    
+
     class RentButton(ui.View):
-        # ... (Phần code RentButton giữ nguyên) ...
         def __init__(self):
             super().__init__(timeout=None)
 
         @ui.button(label="Rent", style=discord.ButtonStyle.primary)
-        async def rent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async def rent(self, interaction, button):
             guild = interaction.guild
             member = interaction.user
-            
-            if member.bot:
-                await interaction.response.send_message("Bot không thể tương tác với nút này.", ephemeral=True)
-                return
 
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                guild.get_member(ADMIN_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.get_member(ADMIN_ID): discord.PermissionOverwrite(read_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True),
             }
 
             temp_channel = await guild.create_text_channel(
-                name="temp-rent-" + datetime.now().strftime("%H%M%S"),
+                name=f"temp-rent-{datetime.now().strftime('%H%M%S')}",
                 overwrites=overwrites
             )
 
-            await temp_channel.send(f"Channel đã tạo cho {member.mention} . Bạn thuê Player nào ạ? Bạn đợi xíu bên mình phản hồi lại nhaaa.")
+            await temp_channel.send(f"Channel đã tạo cho {member.mention}.")
 
             class DoneButton(ui.View):
-                def __init__(self):
-                    super().__init__(timeout=None)
-
                 @ui.button(label="Done", style=discord.ButtonStyle.danger)
-                async def done(self, interaction2: discord.Interaction, button2: discord.ui.Button):
+                async def done(self, interaction2, button2):
                     await temp_channel.delete()
-                    await interaction2.response.send_message("✅ Channel đã xóa.", ephemeral=True)
+                    await interaction2.response.send_message("Đã xóa channel!", ephemeral=True)
 
-            await temp_channel.send("Nhấn Done khi hoàn tất đơn nhé ạaaa.", view=DoneButton())
-            await interaction.response.send_message(f"✅ Đã tạo channel : {temp_channel.mention}", ephemeral=True)
+            await temp_channel.send("Nhấn Done khi hoàn tất.", view=DoneButton())
+            await interaction.response.send_message(f"Đã tạo: {temp_channel.mention}", ephemeral=True)
 
-    await channel.send(embed=embed, file=image_file) # Gửi Embed và File trước
-    await channel.send("Nhấn Rent để trao đổi nha khách iu ơi ⋆𐙚 ̊.", view=RentButton())
-    await ctx.send("✅ Đã post bài thành công.")
+    await channel.send(embed=embed, file=image_file)
+    await channel.send("Nhấn Rent để trao đổi nha!", view=RentButton())
+    await ctx.send("✅ Đã đăng bài thành công.")
 
-# -----------------------
-# Timer !time 
-@bot.command()
-async def time(ctx, *, t: str):
-    if ctx.message.author.id == bot.user.id:
-        return
+# =====================================================
+# LỆNH !qr
+# =====================================================
 
-    t = t.lower().replace(" ", "")
-    hours, minutes = 0, 0
-
-    h_match = re.search(r'(\d+)h', t)
-    m_match = re.search(r'(\d+)m', t)
-
-    if h_match:
-        hours = int(h_match.group(1))
-    if m_match:
-        minutes = int(m_match.group(1))
-
-    if hours == 0 and minutes == 0:
-        await ctx.send("Không nhận diện được thời gian! VD: !time 1h30m, !time 45m")
-        return
-    
-    vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
-    
-    start_time_vn = datetime.now(vn_tz)
-    end_time_vn = start_time_vn + timedelta(hours=hours, minutes=minutes)
-    
-    await ctx.send(
-        f"⏳ Oki vậy là mình bắt đầu từ **{start_time_vn.strftime('%H:%M:%S')}** (VN time) đến **{end_time_vn.strftime('%H:%M:%S')}** nha khách iu ơi ⋆𐙚 ̊."
-    )
-
-    total_seconds = hours * 3600 + minutes * 60
-    
-    await asyncio.sleep(total_seconds)
-    
-    final_end_time_vn = datetime.now(vn_tz)
-
-    await ctx.send(f"{ctx.author.mention} ⏰ Thời gian kết thúc: **{final_end_time_vn.strftime('%H:%M:%S')}**! Đã hết giờ.")
-
-# -----------------------
-# QR command
 @bot.command()
 async def qr(ctx):
-    if ctx.message.author.id == bot.user.id:
-        return
-        
-    embed = Embed(description="Sau khi thanh toán xong thì gửi bill vào đây nhá. Không ghi NDCK giúp mình nha ୨୧")
-    
-    qr_path = "qr.png" 
-    
+    embed = Embed(description="Gửi bill thanh toán vào đây, không ghi NDCK nha ୨୧")
+    qr_path = "qr.png"
+
     if os.path.exists(qr_path):
         qr_file = File(qr_path, filename="qr.png")
         embed.set_image(url="attachment://qr.png")
         await ctx.send(embed=embed, file=qr_file)
     else:
-        await ctx.send("Không tìm thấy ảnh QR. " + embed.description, embed=embed)
+        await ctx.send("Không tìm thấy ảnh QR.")
 
-# -----------------------
-# Khởi chạy bot
+# =====================================================
+# RUN BOT
+# =====================================================
+
 if __name__ == '__main__':
     try:
         bot.run(TOKEN)
     except Exception as e:
-        print(f"Bot gặp lỗi khi chạy: {e}")
-        if "Bad Gateway" in str(e) or "HTTP 401" in str(e):
-             print("\nLỖI: Hãy kiểm tra lại TOKEN DISCORD_BOT_SECRET đã chính xác chưa.")
-
-
+        print(f"Lỗi chạy bot: {e}")
