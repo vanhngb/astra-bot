@@ -1,7 +1,4 @@
 discord.py
 flask
-yt-dlp
-ffmpeg-python
-requests  
 pytz
-
+sqlite3
