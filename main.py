@@ -481,7 +481,7 @@ async def io(ctx, hours:int, member:discord.Member, by:discord.Member=None):
     db_prf_add(str(prf_target.id), hours=hours)
 
     ch=bot.get_channel(CHANNEL_IO_DNT)
-    log_msg = “{} (+{} giờ lương)".format(member.mention, hours, prf_target.mention, hours)
+    log_msg = " {} (+{} giờ lương)"
     
     if ch: await ch.send(log_msg)
     else: await ctx.send(log_msg)
@@ -790,5 +790,6 @@ async def gw(ctx):
 # -------------------------
 if __name__ == '__main__':
     bot.run(TOKEN)
+
 
 
