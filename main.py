@@ -1,7 +1,6 @@
 # bot_full_render.py
-# Full-featured Discord bot for Render
-# Python 3.11 recommended
-# Dependencies: discord.py, flask, pytz, sqlite3
+# Discord bot full-featured cho Render Web Service
+# Python 3.11+, discord.py, SQLite
 
 import os
 import re
@@ -9,13 +8,12 @@ import sqlite3
 import random
 import asyncio
 from datetime import datetime, timedelta
-from threading import Thread
 
 import pytz
 import discord
 from discord.ext import commands, tasks
 from discord import Embed, File, ui
-from flask import Flask
+from quart import Quart
 
 # -------------------------
 # CONFIG
@@ -30,39 +28,19 @@ WELCOME_CHANNEL_ID = 1432658695719751793
 SUPPORT_CHANNEL_ID = 1432685282955755595
 IMAGE_CHANNEL_FEMALE = 1432691499094769704
 IMAGE_CHANNEL_MALE = 1432691597363122357
-
 CHANNEL_IO_DNT = 1448047569421733981
 CHANNEL_MONTHLY_REPORT = 1448052039384043683
 
-TRIGGER_VOICE_CREATE = 1432658695719751794
-TRIGGER_VOICE_PRIVATE = 1448063002518487092
-
+TRIGGER_VOICE_CREATE = 1432658695719751792  # auto create voice
 EXEMPT_ROLE_ID = 1432670531529867295
 ADMIN_ID = 757555763559399424
-ALLOWED_ROLE_NAME = "Staff"
 
-LUONG_GIO_RATE = 25000
+ALLOWED_ROLE_NAME = "Staff"
+LUONG_GIO_RATE = 25000  # VNĐ/giờ
 PASTEL_PINK = 0xFFB7D5
 VN_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
+
 DB_FILE = "luong.db"
-
-# -------------------------
-# FLASK KEEP-ALIVE
-# -------------------------
-app = Flask('')
-@app.route('/')
-def home():
-    return "Bot is running"
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-Thread(target=run_flask).start()
-
-# -------------------------
-# DISCORD BOT SETUP
-# -------------------------
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -------------------------
 # DATABASE
@@ -70,18 +48,21 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS users (
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         book_hours INTEGER DEFAULT 0,
         donate INTEGER DEFAULT 0,
         in_time TEXT
     )""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS prf (
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS prf (
         user_id TEXT PRIMARY KEY,
         prf_hours INTEGER DEFAULT 0,
         prf_donate INTEGER DEFAULT 0
     )""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS logs (
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
         in_time TEXT,
@@ -89,24 +70,55 @@ def init_db():
         hours INTEGER,
         created_at TEXT
     )""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS rooms (
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS rooms (
         voice_channel_id TEXT PRIMARY KEY,
         owner_id TEXT,
         is_hidden INTEGER DEFAULT 0,
         is_locked INTEGER DEFAULT 0
     )""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS monthly_sent ( ym TEXT PRIMARY KEY )""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS code_messages (
-        ping TEXT PRIMARY KEY,
-        user_id TEXT,
-        content TEXT,
-        image_url TEXT
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS monthly_sent ( ym TEXT PRIMARY KEY )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS giveaways (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT,
+        message_id TEXT,
+        title TEXT,
+        winners INTEGER,
+        host_id TEXT,
+        end_at TEXT,
+        ended INTEGER DEFAULT 0
     )""")
     conn.commit()
     conn.close()
-
 init_db()
 
+# -------------------------
+# HELPERS
+# -------------------------
+def fmt_vnd(amount):
+    try:
+        a = int(round(float(amount)))
+    except:
+        a = 0
+    return f"{a:,} đ".replace(",", ".")
+
+def is_admin(member: discord.Member):
+    return member.guild_permissions.administrator or member.id == ADMIN_ID
+
+def has_io_permission(member: discord.Member):
+    if member.guild_permissions.manage_guild:
+        return True
+    if member.id == ADMIN_ID:
+        return True
+    for r in member.roles:
+        if r.name == ALLOWED_ROLE_NAME:
+            return True
+    return False
+
+# DB helpers
 def db_get_user(uid: str):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
@@ -186,146 +198,86 @@ def db_delete_room(voice_id: str):
     conn.commit()
     conn.close()
 
-def db_get_all_users():
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("SELECT user_id, book_hours, donate FROM users")
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-def db_monthly_sent_exists(ym: str):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM monthly_sent WHERE ym=?", (ym,))
-    exists = cur.fetchone() is not None
-    conn.close()
-    return exists
-
-def db_monthly_mark_sent(ym: str):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO monthly_sent(ym) VALUES (?)", (ym,))
-    conn.commit()
-    conn.close()
-
-def db_code_set(ping, user_id, content, image_url=None):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO code_messages(ping,user_id,content,image_url) VALUES (?,?,?,?)",
-                (ping,user_id,content,image_url))
-    conn.commit()
-    conn.close()
-
-def db_code_get(ping):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("SELECT user_id, content, image_url FROM code_messages WHERE ping=?", (ping,))
-    row = cur.fetchone()
-    conn.close()
-    if row:
-        return {"user_id": row[0], "content": row[1], "image_url": row[2]}
-    return None
-
-def db_code_delete_by_user(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM code_messages WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
-
 # -------------------------
-# HELPERS
+# DISCORD BOT
 # -------------------------
-def fmt_vnd(amount):
-    try: a = int(round(float(amount)))
-    except: a = 0
-    return f"{a:,} đ".replace(",", ".")
-
-def is_admin(member: discord.Member):
-    return member.guild_permissions.administrator or member.id == ADMIN_ID
-
-def has_io_permission(member: discord.Member):
-    if member.guild_permissions.manage_guild or member.id == ADMIN_ID:
-        return True
-    for r in member.roles:
-        if r.name == ALLOWED_ROLE_NAME:
-            return True
-    return False
-
-# -------------------------
-# WELCOME
-# -------------------------
-@bot.event
-async def on_member_join(member):
-    ch = bot.get_channel(WELCOME_CHANNEL_ID)
-    if not ch: return
-    avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
-    embed = Embed(description=f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆, mong bạn ở đây thật vui nhá ^^ Có cần hỗ trợ gì thì ⁠<#{SUPPORT_CHANNEL_ID}> nhá", color=PASTEL_PINK)
-    embed.set_thumbnail(url=avatar_url)
-    await ch.send(embed=embed)
-
-# -------------------------
-# VOICE CHANNEL MANAGEMENT
-# -------------------------
-# ... keep code from your voice creation & !voice commands with embed menu ...
-
-# -------------------------
-# SALARY / PRF / IO / DNT / PRF commands
-# -------------------------
-# ... copy over all the !luong / !prf / !io / !dnt commands from your previous full code ...
-
-# -------------------------
-# !code / !code edit / !code rm
-# -------------------------
-# ... copy the logic to save, edit, remove code messages ...
-
-# -------------------------
-# GIVEAWAY
-# -------------------------
-# ... !gw command logic from your previous code ...
-
-# -------------------------
-# POST / RENT
-# -------------------------
-# ... !post with Rent creating private channel + content + done button ...
-
-# -------------------------
-# OTHER COMMANDS
-# -------------------------
-# !time / !qr / !text / !av / !mute / !ban / !clear / !rd / !pick / !luongall
-# ... copy logic as in previous full code, adapted to your latest requirements ...
-
-# -------------------------
-# MONTHLY REPORT
-# -------------------------
-# ... monthly_report_task as in previous code ...
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -------------------------
 # ON_READY
 # -------------------------
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (id: {bot.user.id})")
-    # start monthly report loop
-    if not monthly_report_task.is_running():
-        monthly_report_task.start()
+    print(f"Bot online as {bot.user} (id: {bot.user.id})")
 
 # -------------------------
-# ERROR HANDLING
+# WELCOME MESSAGE
 # -------------------------
 @bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        try: await ctx.message.delete()
-        except: pass
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Thiếu tham số.", delete_after=6)
-    else:
-        print("Command error:", error)
+async def on_member_join(member):
+    ch = member.guild.get_channel(WELCOME_CHANNEL_ID)
+    if ch:
+        embed = Embed(
+            description=f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆, mong bạn ở đây thật vui nhá ^^ Có cần hỗ trợ gì thì ⁠<#{SUPPORT_CHANNEL_ID}> nhá",
+            color=PASTEL_PINK
+        )
+        try:
+            embed.set_thumbnail(url=member.avatar.url)
+        except:
+            pass
+        await ch.send(embed=embed)
 
 # -------------------------
-# RUN
+# SIMPLE !luong / !prf
 # -------------------------
+@bot.command()
+async def luong(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    u = db_get_user(str(target.id))
+    hours = u["book_hours"]
+    donate = u["donate"]
+    pay = hours*LUONG_GIO_RATE
+    total = pay + donate
+    embed = Embed(title=f"Lương {target.display_name}", color=PASTEL_PINK)
+    embed.add_field(name="Giờ book:", value=f"{hours} giờ", inline=False)
+    embed.add_field(name="Lương giờ:", value=f"{fmt_vnd(pay)}", inline=False)
+    embed.add_field(name="Donate:", value=f"{fmt_vnd(donate)}", inline=False)
+    embed.add_field(name="Tổng lương:", value=f"{fmt_vnd(total)}", inline=False)
+    try:
+        await ctx.author.send(embed=embed)
+    except:
+        await ctx.reply("Không thể gửi DM.", delete_after=6)
+    try: await ctx.message.delete()
+    except: pass
+
+@bot.command()
+async def prf(ctx):
+    p = db_prf_get(str(ctx.author.id))
+    embed = Embed(title="PRF", color=PASTEL_PINK)
+    embed.add_field(name="Giờ đã book:", value=f"{p['prf_hours']} giờ", inline=False)
+    embed.add_field(name="Đã donate:", value=f"{fmt_vnd(p['prf_donate'])}", inline=False)
+    try:
+        await ctx.author.send(embed=embed)
+    except:
+        await ctx.reply("Không thể gửi DM.", delete_after=6)
+    try: await ctx.message.delete()
+    except: pass
+
+# -------------------------
+# RUN WITH QUART (async web server)
+# -------------------------
+app = Quart(__name__)
+
+@app.route("/")
+async def home():
+    return "Bot is running"
+
+async def main():
+    # Start bot
+    asyncio.create_task(bot.start(TOKEN))
+    # Start web server
+    await app.run_task(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    asyncio.run(main())
