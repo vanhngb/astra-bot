@@ -1,18 +1,17 @@
 import discord
-from discord.ext import commands
-from discord import Embed, File
+from discord.ext import commands, tasks
+from discord import Embed, File, ui
 from flask import Flask
 from threading import Thread
 import asyncio
 from datetime import datetime, timedelta
-import re
 import os
+import sqlite3
 import requests
 import pytz
-import sqlite3
 
-# -----------------------
-# Flask server ping 24/7
+# ---------------------------
+# Flask ping 24/7
 app = Flask('')
 
 @app.route('/')
@@ -25,176 +24,205 @@ def run():
 
 Thread(target=run).start()
 
-# -----------------------
+# ---------------------------
 # Bot setup
 TOKEN = os.getenv('DISCORD_BOT_SECRET')
 if not TOKEN:
-    print("LỖI: Thiếu biến môi trường 'DISCORD_BOT_SECRET'. Không thể chạy bot.")
+    print("Missing token!")
     exit()
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# -----------------------
-# Config
-WELCOME_CHANNEL_ID = 1432658695719751793
-ROLE_IO = 1448047569421733981
-ADMIN_ID = 1432670531529867295
-REPORT_CHANNEL_ID = 1448052039384043683
-IMAGE_CHANNEL_FEMALE = 1432691499094769704
-IMAGE_CHANNEL_MALE = 1432691597363122357
-
-# -----------------------
-# Database setup
-conn = sqlite3.connect('bot_data.db')
+# ---------------------------
+# Database
+DB_PATH = "data.db"
+conn = sqlite3.connect(DB_PATH)
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS luong (user_id INTEGER PRIMARY KEY, gio_book INTEGER, donate INTEGER)''')
-c.execute('''CREATE TABLE IF NOT EXISTS prf (user_id INTEGER PRIMARY KEY, gio_book INTEGER, donate INTEGER)''')
-c.execute('''CREATE TABLE IF NOT EXISTS code_data (keyword TEXT PRIMARY KEY, ping TEXT, content TEXT, image TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS luong (
+    user_id INTEGER PRIMARY KEY,
+    gio_book INTEGER DEFAULT 0,
+    donate INTEGER DEFAULT 0
+)''')
+c.execute('''CREATE TABLE IF NOT EXISTS prf (
+    user_id INTEGER PRIMARY KEY,
+    gio_da_book INTEGER DEFAULT 0,
+    donate INTEGER DEFAULT 0
+)''')
+c.execute('''CREATE TABLE IF NOT EXISTS codes (
+    user_id INTEGER PRIMARY KEY,
+    title TEXT,
+    content TEXT,
+    image TEXT
+)''')
 conn.commit()
 
-# -----------------------
+# ---------------------------
+# Config
+WELCOME_CHANNEL = 1432658695719751793
+SUPPORT_CHANNEL = 1432685282955755595
+IMAGE_CHANNEL_FEMALE = 1432691499094769704
+IMAGE_CHANNEL_MALE = 1432691597363122357
+ADMIN_ROLE = 1432670531529867295
+PING_CHANNEL = 1448047569421733981
+LUONGALL_CHANNEL = 1448052039384043683
+VOICE_CATEGORY = 1448062526599205037
+FIXED_RATE = 25000
+
+# ---------------------------
+# Ping Healthchecks
+HC_PING_URL = os.getenv('HEALTHCHECKS_URL')
+
+async def keep_alive_ping():
+    if not HC_PING_URL:
+        return
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            requests.get(HC_PING_URL, timeout=10)
+        except:
+            pass
+        await asyncio.sleep(14*60)
+
 @bot.event
 async def on_ready():
-    print(f'Bot logged in as {bot.user}')
+    print(f"Bot logged in as {bot.user}")
+    if HC_PING_URL:
+        bot.loop.create_task(keep_alive_ping())
 
+# ---------------------------
+# Welcome
 @bot.event
 async def on_member_join(member):
-    channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    channel = bot.get_channel(WELCOME_CHANNEL)
     if channel:
         embed = Embed(
-            description=f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆, mong bạn ở đây thật vui nhá ^^ Có cần hỗ trợ gì thì <#{ROLE_IO}> nhá",
+            description=f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆, mong bạn ở đây thật vui nhá ^^\nCó cần hỗ trợ gì thì <#{SUPPORT_CHANNEL}> nhá",
             color=0xFFC0CB
         )
-        embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+        embed.set_thumbnail(url=member.avatar.url)
         await channel.send(embed=embed)
 
-# -----------------------
+# ---------------------------
 # !luong
 @bot.command()
 async def luong(ctx, member: discord.Member=None):
     target = member or ctx.author
-    c.execute('SELECT gio_book, donate FROM luong WHERE user_id=?', (target.id,))
+    c.execute("SELECT gio_book, donate FROM luong WHERE user_id=?", (target.id,))
     row = c.fetchone()
     gio = row[0] if row else 0
     donate = row[1] if row else 0
-    luong_gio = gio * 25000
-    tong = luong_gio + donate
-    embed = Embed(title=f"Lương tháng {datetime.now(pytz.timezone('Asia/Ho_Chi_Minh')).month}", color=0xFFC0CB)
-    embed.add_field(name='𐙚 Giờ book:', value=str(gio))
-    embed.add_field(name='𐙚 Lương giờ:', value=f'{luong_gio}đ')
-    embed.add_field(name='𐙚 Donate:', value=f'{donate}đ')
-    embed.add_field(name='𐙚 Lương tổng:', value=f'{tong}đ')
-    try:
-        await target.send(embed=embed)
-        if target != ctx.author:
-            await ctx.send(f'✅ Đã gửi lương của {target.display_name} vào DM.')
-    except:
-        await ctx.send('❌ Không thể gửi DM cho user này.')
+    tong = gio*FIXED_RATE + donate
 
-# -----------------------
+    embed = Embed(
+        title=f"Lương tháng {datetime.now(pytz.timezone('Asia/Ho_Chi_Minh')).strftime('%m/%Y')}",
+        color=0xFFC0CB
+    )
+    embed.add_field(name="𐙚 Giờ book:", value=str(gio))
+    embed.add_field(name="𐙚 Lương giờ:", value=f"{gio*FIXED_RATE}đ")
+    embed.add_field(name="𐙚 Donate:", value=f"{donate}đ")
+    embed.add_field(name="𐙚 Lương tổng:", value=f"{tong}đ")
+
+    try:
+        await ctx.author.send(embed=embed)
+        if ctx.author != target:
+            await ctx.send(f"✅ Lương của {target.display_name} đã gửi vào DM.")
+    except:
+        await ctx.send(embed=embed)
+
+# ---------------------------
 # !prf
 @bot.command()
 async def prf(ctx, member: discord.Member=None):
     target = member or ctx.author
-    c.execute('SELECT gio_book, donate FROM prf WHERE user_id=?', (target.id,))
+    c.execute("SELECT gio_da_book, donate FROM prf WHERE user_id=?", (target.id,))
     row = c.fetchone()
     gio = row[0] if row else 0
     donate = row[1] if row else 0
-    embed = Embed(title=f"Thống kê {target.display_name}", color=0xFFC0CB)
-    embed.add_field(name='𐙚 Giờ đã book:', value=str(gio))
-    embed.add_field(name='𐙚 Đã Donate:', value=f'{donate}đ')
+    embed = Embed(
+        title="Thông tin PRF",
+        color=0xFFC0CB
+    )
+    embed.add_field(name="𐙚 Giờ đã book:", value=str(gio))
+    embed.add_field(name="𐙚 Đã Donate:", value=f"{donate}đ")
     await ctx.send(embed=embed)
 
-# -----------------------
-# !io
+# ---------------------------
+# !io <time> @user by @user
 @bot.command()
-async def io(ctx, time: str, member: discord.Member, by: discord.Member):
-    match = re.match(r'(\d+)h', time)
-    if not match:
-        await ctx.send('❌ Format: !io <time>h @user by @user')
-        return
-    gio = int(match.group(1))
-    # Update luong
-    c.execute('SELECT gio_book FROM luong WHERE user_id=?', (member.id,))
-    row = c.fetchone()
-    if row:
-        c.execute('UPDATE luong SET gio_book = gio_book + ? WHERE user_id=?', (gio, member.id))
-    else:
-        c.execute('INSERT INTO luong (user_id, gio_book, donate) VALUES (?, ?, 0)', (member.id, gio))
-    # Update prf
-    c.execute('SELECT gio_book FROM prf WHERE user_id=?', (by.id,))
-    row2 = c.fetchone()
-    if row2:
-        c.execute('UPDATE prf SET gio_book = gio_book + ? WHERE user_id=?', (gio, by.id))
-    else:
-        c.execute('INSERT INTO prf (user_id, gio_book, donate) VALUES (?, ?, 0)', (by.id, gio))
-    conn.commit()
-    # Send notification
-    channel = bot.get_channel(ROLE_IO)
-    await channel.send(f'{member.mention} : {gio}')
+async def io(ctx, time: str, target: discord.Member, by: discord.Member=None):
+    by = by or ctx.author
+    # Convert time
+    match = re.match(r'(\d+)h', time.lower())
+    hours = int(match.group(1)) if match else 0
+    match = re.match(r'(\d+)m', time.lower())
+    minutes = int(match.group(1)) if match else 0
+    total_hours = hours + minutes/60
+    total_hours_int = int(total_hours)
 
-# -----------------------
-# !dnt
+    # Add to luong for first user
+    c.execute("INSERT OR IGNORE INTO luong (user_id) VALUES (?)", (target.id,))
+    c.execute("UPDATE luong SET gio_book=gio_book+? WHERE user_id=?", (total_hours_int, target.id))
+
+    # Add to prf for second user
+    c.execute("INSERT OR IGNORE INTO prf (user_id) VALUES (?)", (by.id,))
+    c.execute("UPDATE prf SET gio_da_book=gio_da_book+? WHERE user_id=?", (total_hours_int, by.id))
+    conn.commit()
+
+    await ctx.send(f"{target.mention} : {total_hours_int}", delete_after=10)
+    ch = bot.get_channel(PING_CHANNEL)
+    await ch.send(f"{target.mention} : {total_hours_int}")
+
+# ---------------------------
+# !dnt <amount> @user by @user
 @bot.command()
-async def dnt(ctx, amount: int, member: discord.Member, by: discord.Member):
-    # Update luong
-    c.execute('SELECT donate FROM luong WHERE user_id=?', (member.id,))
-    row = c.fetchone()
-    if row:
-        c.execute('UPDATE luong SET donate = donate + ? WHERE user_id=?', (amount, member.id))
-    else:
-        c.execute('INSERT INTO luong (user_id, gio_book, donate) VALUES (?, 0, ?)', (member.id, amount))
-    # Update prf
-    c.execute('SELECT donate FROM prf WHERE user_id=?', (by.id,))
-    row2 = c.fetchone()
-    if row2:
-        c.execute('UPDATE prf SET donate = donate + ? WHERE user_id=?', (amount, by.id))
-    else:
-        c.execute('INSERT INTO prf (user_id, gio_book, donate) VALUES (?, 0, ?)', (by.id, amount))
-    conn.commit()
-    # Send notification
-    channel = bot.get_channel(ROLE_IO)
-    await channel.send(f'{member.mention} : {amount}')
+async def dnt(ctx, amount: int, target: discord.Member, by: discord.Member=None):
+    by = by or ctx.author
+    c.execute("INSERT OR IGNORE INTO luong (user_id) VALUES (?)", (target.id,))
+    c.execute("UPDATE luong SET donate=donate+? WHERE user_id=?", (amount, target.id))
 
-# -----------------------
-# !rs
+    c.execute("INSERT OR IGNORE INTO prf (user_id) VALUES (?)", (by.id,))
+    c.execute("UPDATE prf SET donate=donate+? WHERE user_id=?", (amount, by.id))
+    conn.commit()
+
+    await ctx.send(f"{target.mention} : {amount}đ", delete_after=10)
+    ch = bot.get_channel(PING_CHANNEL)
+    await ch.send(f"{target.mention} : {amount}đ")
+
+# ---------------------------
+# !rs reset toàn bộ
 @bot.command()
 async def rs(ctx):
-    c.execute('UPDATE luong SET gio_book=0, donate=0')
-    c.execute('UPDATE prf SET gio_book=0, donate=0')
+    c.execute("UPDATE luong SET gio_book=0, donate=0")
+    c.execute("UPDATE prf SET gio_da_book=0, donate=0")
     conn.commit()
-    await ctx.send('✅ Đã reset toàn bộ dữ liệu lương và prf.')
+    await ctx.send("✅ Đã reset lương tất cả.", delete_after=5)
 
-# -----------------------
-# !code
+# ---------------------------
+# !voice <name> tạo voice
 @bot.command()
-async def code(ctx, ping: str, *, content):
-    img_url = None
-    if ctx.message.attachments:
-        img_url = ctx.message.attachments[0].url
-    c.execute('REPLACE INTO code_data (keyword, ping, content, image) VALUES (?, ?, ?, ?)', (ping, ping, content, img_url))
-    conn.commit()
-    await ctx.send(f'✅ Đã lưu code với từ khóa: {ping}')
+async def voice(ctx, *, name=None):
+    name = name or f"{ctx.author.display_name}"
+    category = bot.get_channel(VOICE_CATEGORY)
+    channel = await ctx.guild.create_voice_channel(name, category=category)
+    await ctx.send(f"✅ Voice channel `{channel.name}` đã được tạo!", delete_after=10)
 
-# Trigger code
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    c.execute('SELECT ping, content, image FROM code_data WHERE keyword=?', (message.content,))
-    row = c.fetchone()
-    if row:
-        embed = Embed(description=f'{row[0]} {row[1]}', color=0xFFC0CB)
-        if row[2]:
-            embed.set_image(url=row[2])
-        await message.channel.send(embed=embed)
-    await bot.process_commands(message)
+# ---------------------------
+# !qr
+@bot.command()
+async def qr(ctx):
+    qr_path = "qr.png"
+    embed = Embed(
+        title="QR",
+        color=0xFFC0CB
+    )
+    if os.path.exists(qr_path):
+        embed.set_image(url="attachment://qr.png")
+        await ctx.send(embed=embed, file=File(qr_path))
+    else:
+        await ctx.send(embed=embed)
 
-# -----------------------
-# Run bot
-if __name__ == '__main__':
-    try:
-        bot.run(TOKEN)
-    except Exception as e:
-        print(f'Bot gặp lỗi: {e}')
+# ---------------------------
+# Keep bot running
+if __name__ == "__main__":
+    bot.run(TOKEN)
