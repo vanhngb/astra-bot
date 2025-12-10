@@ -26,7 +26,7 @@ def run():
 Thread(target=run).start()
 
 # -----------------------
-TOKEN = os.getenv('MTQzMjY2ODM4OTk0MzQxMDc4MA.GmQ1p_.euDRgQdn8rcTHcUD7WXtUzBM80uDYKuh45Sy3Y')
+TOKEN = os.getenv('DISCORD_BOT_SECRET')
 if not TOKEN:
     print("LỖI: Thiếu biến môi trường 'DISCORD_BOT_SECRET'. Không thể chạy bot.")
     exit()
@@ -248,5 +248,6 @@ async def time(ctx, duration: str):
 # Run bot
 if __name__ == '__main__':
     bot.run(TOKEN)
+
 
 
