@@ -1,7 +1,7 @@
 # bot_full.py
 # Full-featured Discord bot per user's spec (single file)
 # Requirements: discord.py >= 2.0, pytz, flask
-# Python 3.11+ recommended
+# Python 3.11 recommended
 # Set DISCORD_BOT_SECRET environment variable
 
 import os
@@ -26,7 +26,7 @@ if not TOKEN:
     print("ERROR: Please set DISCORD_BOT_SECRET environment variable.")
     exit(1)
 
-# IDs and settings (final confirmed)
+# IDs and settings
 WELCOME_CHANNEL_ID = 1432659040680284191
 SUPPORT_CHANNEL_ID = 1432685282955755595
 IMAGE_CHANNEL_FEMALE = 1432691499094769704  # !post fm
@@ -44,7 +44,7 @@ ADMIN_ID = 757555763559399424
 ALLOWED_ROLE_NAME = "Staff"
 
 CHANNEL_IO_DNT = 1448047569421733981
-CHANNEL_LUONG_ALL = 1448052039384043683
+CHANNEL_MONTHLY_REPORT = 1448052039384043683
 
 LUONG_GIO_RATE = 25000
 PASTEL_PINK = 0xFFB7D5
@@ -100,7 +100,8 @@ def init_db():
         voice_channel_id TEXT PRIMARY KEY,
         owner_id TEXT,
         is_hidden INTEGER DEFAULT 0,
-        is_locked INTEGER DEFAULT 0
+        is_locked INTEGER DEFAULT 0,
+        text_channel_id TEXT
     )""")
     cur.execute("""
     CREATE TABLE IF NOT EXISTS giveaways (
@@ -113,6 +114,9 @@ def init_db():
         end_at TEXT,
         ended INTEGER DEFAULT 0
     )""")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS monthly_sent ( ym TEXT PRIMARY KEY )
+    """)
     conn.commit()
     conn.close()
 
@@ -198,6 +202,31 @@ def db_delete_code_by_user_id(target_user_id):
     conn.commit()
     conn.close()
 
+def db_add_room(voice_id, owner_id, is_hidden=0, is_locked=0, text_channel_id=None):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO rooms(voice_channel_id, owner_id, is_hidden, is_locked, text_channel_id) VALUES (?,?,?,?,?)",
+                (str(voice_id), str(owner_id), int(is_hidden), int(is_locked), str(text_channel_id) if text_channel_id else None))
+    conn.commit()
+    conn.close()
+
+def db_get_room_by_voice(voice_id):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT voice_channel_id, owner_id, is_hidden, is_locked, text_channel_id FROM rooms WHERE voice_channel_id=?", (str(voice_id),))
+    r = cur.fetchone()
+    conn.close()
+    if r:
+        return {"voice_channel_id": r[0], "owner_id": r[1], "is_hidden": bool(r[2]), "is_locked": bool(r[3]), "text_channel_id": r[4]}
+    return None
+
+def db_delete_room(voice_id):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM rooms WHERE voice_channel_id=?", (str(voice_id),))
+    conn.commit()
+    conn.close()
+
 def db_get_all_users():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
@@ -205,6 +234,21 @@ def db_get_all_users():
     rows = cur.fetchall()
     conn.close()
     return rows
+
+def db_monthly_sent_exists(ym):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM monthly_sent WHERE ym=?", (ym,))
+    exists = cur.fetchone() is not None
+    conn.close()
+    return exists
+
+def db_monthly_mark_sent(ym):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO monthly_sent(ym) VALUES (?)", (ym,))
+    conn.commit()
+    conn.close()
 
 # -------------------------
 # Helpers
@@ -214,7 +258,6 @@ def fmt_vnd(amount):
         a = int(round(float(amount)))
     except:
         a = 0
-    # format with dot as thousands sep
     return f"{a:,} đ".replace(",", ".")
 
 def is_admin(member: discord.Member):
@@ -231,7 +274,7 @@ def has_io_permission(member: discord.Member):
     return False
 
 # -------------------------
-# Welcome banner (anime pastel-like)
+# Welcome banner with avatar + nicer background
 # -------------------------
 @bot.event
 async def on_member_join(member):
@@ -242,20 +285,49 @@ async def on_member_join(member):
         av_url = member.avatar.url if member.avatar else member.default_avatar.url
     except:
         av_url = None
-    # Create a banner-like embed: big title + avatar as thumbnail and image (simple approach)
+    # Banner-like embed: thumbnail avatar + big image (we reuse avatar as image for simplicity)
     embed = Embed(title=f"Chào mừng {member.display_name}!", description=f"Chào mừng {member.mention} đến với ⋆. 𐙚˚࿔ 𝒜𝓈𝓉𝓇𝒶 𝜗𝜚˚⋆, mong bạn ở đây thật vui nhá ^^\nCó cần hỗ trợ gì thì <#{SUPPORT_CHANNEL_ID}> nhá", color=PASTEL_PINK)
     if av_url:
         embed.set_thumbnail(url=av_url)
-        # use avatar also as big image to create banner feel (client will display)
+        # Use avatar as main image too to create a banner-like look (discord will display both)
         embed.set_image(url=av_url)
     embed.set_footer(text=f"Joined at {datetime.now(VN_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
     try:
         await channel.send(embed=embed)
-    except Exception as e:
-        print("welcome send error:", e)
+    except:
+        pass
 
 # -------------------------
-# Voice create: create voice only (no paired text). No buttons posted to voice channel.
+# Room Control View (but per your latest request we will NOT create paired text channel for voice)
+# For voice we will only create voice channel. Buttons won't be used there (discord doesn't allow buttons in voice).
+# For Rent (text), buttons remain.
+# -------------------------
+class InviteModal(ui.Modal):
+    user_mention = ui.TextInput(label="Nhập mention user (vd: @user)", required=True, placeholder="@user")
+    def __init__(self, channel_id):
+        super().__init__(title="Invite user")
+        self.channel_id = channel_id
+    async def on_submit(self, interaction: discord.Interaction):
+        text = self.user_mention.value.strip()
+        mentions = re.findall(r'<@!?(\d+)>', text)
+        if not mentions:
+            await interaction.response.send_message("Không tìm thấy mention.", ephemeral=True)
+            return
+        ch = interaction.guild.get_channel(int(self.channel_id))
+        if not ch:
+            await interaction.response.send_message("Channel không tồn tại.", ephemeral=True)
+            return
+        for uid in mentions:
+            member = interaction.guild.get_member(int(uid))
+            if member:
+                try:
+                    await ch.set_permissions(member, view_channel=True, connect=True, read_messages=True, send_messages=True)
+                except:
+                    pass
+        await interaction.response.send_message("Đã invite (không gửi thông báo).", ephemeral=True)
+
+# -------------------------
+# Voice create: create voice only (no paired text). Per latest request.
 # -------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -275,10 +347,15 @@ async def on_voice_state_update(member, before, after):
                 await member.move_to(new_voice)
             except:
                 pass
-            db_add_room = None  # we do not store extra for voice here (table exists but optional)
-            # do NOT send control with buttons into voice (impossible). Optionally notify support channel
-            # per request: do NOT send message to 1432685282955755595
-            return
+            db_add_room(str(new_voice.id), str(member.id), is_hidden=0, is_locked=0, text_channel_id=None)
+            # per request: send a simple embed to support channel only (no buttons)
+            ch = guild.get_channel(SUPPORT_CHANNEL_ID) or guild.system_channel
+            if ch:
+                try:
+                    embed = Embed(title="Voice room created", description=f"Voice room {new_voice.mention} đã được tạo.", color=PASTEL_PINK)
+                    await ch.send(embed=embed)
+                except:
+                    pass
 
         # Private voice trigger
         if (before.channel is None or (before.channel and before.channel.id != TRIGGER_VOICE_PRIVATE)) and after.channel and after.channel.id == TRIGGER_VOICE_PRIVATE:
@@ -297,107 +374,52 @@ async def on_voice_state_update(member, before, after):
                 await member.move_to(new_voice)
             except:
                 pass
-            return
+            db_add_room(str(new_voice.id), str(member.id), is_hidden=1, is_locked=1, text_channel_id=None)
+            ch = guild.get_channel(SUPPORT_CHANNEL_ID) or guild.system_channel
+            if ch:
+                try:
+                    embed = Embed(title="Private voice room created", description=f"Private voice room {new_voice.mention} đã được tạo.", color=PASTEL_PINK)
+                    await ch.send(embed=embed)
+                except:
+                    pass
 
+        # Cleanup empty rooms
+        if before.channel and (after.channel is None or (after.channel and after.channel.id != before.channel.id)):
+            left_channel = before.channel
+            row = db_get_room_by_voice(str(left_channel.id))
+            if row:
+                if len(left_channel.members) == 0:
+                    try:
+                        await left_channel.delete(reason="Auto-delete empty room")
+                    except:
+                        pass
+                    db_delete_room(str(left_channel.id))
     except Exception as e:
         print("on_voice_state_update error:", e)
 
 # -------------------------
-# Modal classes for IO and DNT
+# Modal classes for IO and DNT (and commands with fallback text parsing)
 # -------------------------
 class IOCreateModal(ui.Modal):
-    # per your choice B earlier: modal won't collect mentions; modal used for optional note
-    note = ui.TextInput(label="Ghi chú (tuỳ chọn)", required=False, style=discord.TextStyle.long)
-    def __init__(self, ctx_info: dict):
-        """
-        ctx_info: {'target_id': str, 'hours': int, 'actor_id': str or None}
-        """
-        super().__init__(title="Xác nhận IO")
-        self.ctx_info = ctx_info
-
+    time_field = ui.TextInput(label="Số giờ (vd: 2h)", required=True, placeholder="2h")
+    target_field = ui.TextInput(label="Tag người nhận (vd: @user)", required=True, placeholder="@user")
+    actor_field = ui.TextInput(label="Tag người thực hiện (by) - optional", required=False, placeholder="@actor (optional)")
+    def __init__(self):
+        super().__init__(title="Nhập IO")
     async def on_submit(self, interaction: discord.Interaction):
-        tgt = self.ctx_info.get("target_id")
-        hours = self.ctx_info.get("hours", 0)
-        actor_id = self.ctx_info.get("actor_id")
-        # update DB
-        t = db_get_user(str(tgt))
-        db_update_user(str(tgt), book_hours=int(t["book_hours"]) + int(hours))
-        if actor_id:
-            db_prf_add_hours(str(actor_id), int(hours))
-        ch = bot.get_channel(CHANNEL_IO_DNT)
-        if ch:
-            try:
-                await ch.send(f"<@{tgt}> : {hours} giờ")
-            except:
-                pass
-        await interaction.response.send_message("Đã lưu IO.", ephemeral=True)
-
-class DNTCreateModal(ui.Modal):
-    note = ui.TextInput(label="Ghi chú (tuỳ chọn)", required=False, style=discord.TextStyle.long)
-    def __init__(self, ctx_info: dict):
-        """
-        ctx_info: {'target_id': str, 'amount': int, 'actor_id': str or None}
-        """
-        super().__init__(title="Xác nhận Donate")
-        self.ctx_info = ctx_info
-
-    async def on_submit(self, interaction: discord.Interaction):
-        tgt = self.ctx_info.get("target_id")
-        amount = self.ctx_info.get("amount", 0)
-        actor_id = self.ctx_info.get("actor_id")
-        u = db_get_user(str(tgt))
-        db_update_user(str(tgt), donate=int(u["donate"]) + int(amount))
-        if actor_id:
-            db_prf_add_donate(str(actor_id), int(amount))
-        ch = bot.get_channel(CHANNEL_IO_DNT)
-        if ch:
-            try:
-                await ch.send(f"<@{tgt}> : {fmt_vnd(amount)}")
-            except:
-                pass
-        await interaction.response.send_message("Đã lưu Donate.", ephemeral=True)
-
-# -------------------------
-# Commands: io / dnt with modal fallback
-# -------------------------
-@bot.command(name="io")
-async def cmd_io(ctx, *, raw: str = None):
-    """
-    Usage:
-    - Preferred: !io 2h @target [by @actor]
-      then bot opens modal to confirm (note optional).
-    - If client doesn't support modal, parse directly from raw.
-    """
-    if not has_io_permission(ctx.author):
-        return await ctx.reply("Bạn không có quyền dùng lệnh này.", delete_after=8)
-    if not raw:
-        return await ctx.reply("VD: !io 2h @user [by @actor]", delete_after=8)
-    # parse
-    parts = raw.split()
-    time_token = parts[0]
-    m = re.match(r"^(\d+)(?:\.\d+)?h$", time_token.lower())
-    if not m:
-        return await ctx.reply("Sai format time. VD: 2h", delete_after=8)
-    hours = int(m.group(1))
-    mentions = re.findall(r'<@!?(\d+)>', raw)
-    if len(mentions) < 1:
-        return await ctx.reply("Cần tag target.", delete_after=8)
-    target_id = mentions[0]
-    actor_id = mentions[1] if len(mentions) >= 2 else None
-    # try open modal via interaction
-    try:
-        modal = IOCreateModal({'target_id': target_id, 'hours': hours, 'actor_id': actor_id})
-        if hasattr(ctx, "interaction") and ctx.interaction:
-            await ctx.interaction.response.send_modal(modal)
-            try:
-                await ctx.message.delete()
-            except:
-                pass
+        time_token = self.time_field.value.strip()
+        m = re.match(r"^(\d+)(?:\.\d+)?h$", time_token.lower())
+        if not m:
+            await interaction.response.send_message("Sai định dạng thời gian. VD: 2h", ephemeral=True)
             return
-        # fallback: try to use send_modal on ctx (some clients)
-        await ctx.send("Mở form xác nhận IO (nếu client hỗ trợ modal)...", delete_after=6)
-    except Exception:
-        # fallback: directly save
+        hours = int(m.group(1))
+        targets = re.findall(r'<@!?(\d+)>', self.target_field.value)
+        if not targets:
+            await interaction.response.send_message("Không tìm thấy target mention.", ephemeral=True)
+            return
+        target_id = targets[0]
+        actors = re.findall(r'<@!?(\d+)>', self.actor_field.value) if self.actor_field.value else []
+        actor_id = actors[0] if actors else None
         t = db_get_user(str(target_id))
         db_update_user(str(target_id), book_hours=int(t["book_hours"]) + hours)
         if actor_id:
@@ -408,43 +430,29 @@ async def cmd_io(ctx, *, raw: str = None):
                 await ch.send(f"<@{target_id}> : {hours} giờ")
             except:
                 pass
-        try:
-            await ctx.message.delete()
-        except:
-            pass
+        await interaction.response.send_message("Đã lưu IO.", ephemeral=True)
 
-@bot.command(name="dnt")
-async def cmd_dnt(ctx, *, raw: str = None):
-    """
-    Usage:
-    !dnt 20000 @target [by @actor]
-    """
-    if not has_io_permission(ctx.author):
-        return await ctx.reply("Bạn không có quyền dùng lệnh này.", delete_after=8)
-    if not raw:
-        return await ctx.reply("VD: !dnt 20000 @user [by @actor]", delete_after=8)
-    m = re.match(r"^(\d+)\s+", raw)
-    if not m:
-        return await ctx.reply("Sai cú pháp. VD: !dnt 20000 @user [by @actor]", delete_after=8)
-    amount = int(m.group(1))
-    mentions = re.findall(r'<@!?(\d+)>', raw)
-    if len(mentions) < 1:
-        return await ctx.reply("Cần tag target.", delete_after=8)
-    target_id = mentions[0]
-    actor_id = mentions[1] if len(mentions) >= 2 else None
-    try:
-        modal = DNTCreateModal({'target_id': target_id, 'amount': amount, 'actor_id': actor_id})
-        if hasattr(ctx, "interaction") and ctx.interaction:
-            await ctx.interaction.response.send_modal(modal)
-            try:
-                await ctx.message.delete()
-            except:
-                pass
+class DNTCreateModal(ui.Modal):
+    amount_field = ui.TextInput(label="Số tiền (vd: 20000)", required=True, placeholder="20000")
+    target_field = ui.TextInput(label="Tag người nhận (vd: @user)", required=True, placeholder="@user")
+    actor_field = ui.TextInput(label="Tag người thực hiện (by) - optional", required=False, placeholder="@actor (optional)")
+    def __init__(self):
+        super().__init__(title="Nhập Donate")
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amount = int(self.amount_field.value.strip())
+        except:
+            await interaction.response.send_message("Số tiền không hợp lệ.", ephemeral=True)
             return
-        await ctx.send("Mở form xác nhận Donate (nếu client hỗ trợ modal)...", delete_after=6)
-    except Exception:
-        u = db_get_user(str(target_id))
-        db_update_user(str(target_id), donate=int(u["donate"]) + amount)
+        targets = re.findall(r'<@!?(\d+)>', self.target_field.value)
+        if not targets:
+            await interaction.response.send_message("Không tìm thấy target mention.", ephemeral=True)
+            return
+        target_id = targets[0]
+        actors = re.findall(r'<@!?(\d+)>', self.actor_field.value) if self.actor_field.value else []
+        actor_id = actors[0] if actors else None
+        t = db_get_user(str(target_id))
+        db_update_user(str(target_id), donate=int(t["donate"]) + amount)
         if actor_id:
             db_prf_add_donate(str(actor_id), amount)
         ch = bot.get_channel(CHANNEL_IO_DNT)
@@ -453,10 +461,97 @@ async def cmd_dnt(ctx, *, raw: str = None):
                 await ch.send(f"<@{target_id}> : {fmt_vnd(amount)}")
             except:
                 pass
-        try:
-            await ctx.message.delete()
-        except:
-            pass
+        await interaction.response.send_message("Đã lưu Donate.", ephemeral=True)
+
+# -------------------------
+# IO / DNT commands with modal fallback
+# -------------------------
+@bot.command(name="io")
+async def cmd_io(ctx, *, raw: str = None):
+    if not has_io_permission(ctx.author):
+        return await ctx.reply("Bạn không có quyền dùng lệnh này.", delete_after=8)
+    modal = IOCreateModal()
+    try:
+        if hasattr(ctx, "interaction") and ctx.interaction:
+            await ctx.interaction.response.send_modal(modal)
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+            return
+        # otherwise instruct and allow raw fallback
+        if raw:
+            parts = raw.split()
+            time_token = parts[0]
+            m = re.match(r"^(\d+)(?:\.\d+)?h$", time_token.lower())
+            if not m:
+                return await ctx.reply("Sai định dạng thời gian. VD: 2h", delete_after=8)
+            hours = int(m.group(1))
+            mentions = re.findall(r'<@!?(\d+)>', raw)
+            if len(mentions) < 1:
+                return await ctx.reply("Cần tag target.", delete_after=8)
+            target_id = mentions[0]
+            actor_id = mentions[1] if len(mentions) >= 2 else None
+            t = db_get_user(str(target_id))
+            db_update_user(str(target_id), book_hours=int(t["book_hours"]) + hours)
+            if actor_id:
+                db_prf_add_hours(str(actor_id), hours)
+            ch = bot.get_channel(CHANNEL_IO_DNT)
+            if ch:
+                try:
+                    await ch.send(f"<@{target_id}> : {hours} giờ")
+                except:
+                    pass
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+        else:
+            await ctx.reply("Mở form nhập IO... (nếu client hỗ trợ modal). Hoặc dùng: `!io 2h @target by @actor`", delete_after=10)
+    except Exception:
+        await ctx.reply("Không thể mở modal trên client này. Dùng: `!io 2h @target by @actor`", delete_after=10)
+
+@bot.command(name="dnt")
+async def cmd_dnt(ctx, *, raw: str = None):
+    if not has_io_permission(ctx.author):
+        return await ctx.reply("Bạn không có quyền dùng lệnh này.", delete_after=8)
+    modal = DNTCreateModal()
+    try:
+        if hasattr(ctx, "interaction") and ctx.interaction:
+            await ctx.interaction.response.send_modal(modal)
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+            return
+        if raw:
+            m = re.match(r"^(\d+)\s+", raw)
+            if not m:
+                return await ctx.reply("Sai cú pháp. VD: !dnt 20000 @target [by @actor]", delete_after=8)
+            amount = int(m.group(1))
+            mentions = re.findall(r'<@!?(\d+)>', raw)
+            if len(mentions) < 1:
+                return await ctx.reply("Cần tag target.", delete_after=8)
+            target_id = mentions[0]
+            actor_id = mentions[1] if len(mentions) >= 2 else None
+            u = db_get_user(str(target_id))
+            db_update_user(str(target_id), donate=int(u["donate"]) + amount)
+            if actor_id:
+                db_prf_add_donate(str(actor_id), amount)
+            ch = bot.get_channel(CHANNEL_IO_DNT)
+            if ch:
+                try:
+                    await ch.send(f"<@{target_id}> : {fmt_vnd(amount)}")
+                except:
+                    pass
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+        else:
+            await ctx.reply("Mở form nhập Donate... (nếu client hỗ trợ modal). Hoặc dùng: `!dnt 20000 @target by @actor`", delete_after=10)
+    except Exception:
+        await ctx.reply("Không thể mở modal trên client này. Dùng: `!dnt 20000 @target by @actor`", delete_after=10)
 
 # -------------------------
 # luong, prf, luongall, rs (reset)
@@ -516,28 +611,21 @@ async def rs(ctx):
 
 @bot.command()
 async def luongall(ctx):
-    # compile all users and post to CHANNEL_LUONG_ALL as embed
+    # compile all users and post to CHANNEL_IO_DNT (1448047569421733981)
     rows = db_get_all_users()
-    ch = bot.get_channel(CHANNEL_LUONG_ALL)
+    ch = bot.get_channel(CHANNEL_IO_DNT)
     if not ch:
         return await ctx.reply("Không tìm thấy channel báo cáo.", delete_after=8)
-    embed = Embed(title="Tổng hợp lương", description="Ai thắc mắc về lương phản hồi trước 12h ngày mai nhaa", color=PASTEL_PINK)
-    msg_text = ""
+    msg = "📋 **Tổng hợp lương (tất cả người)**\n\n"
     for uid, hours, donate in rows:
         pay = int(hours) * LUONG_GIO_RATE
         total = pay + int(donate)
-        msg_text += f"<@{uid}> — Giờ book: {hours} giờ | Lương giờ: {fmt_vnd(pay)} | Donate: {fmt_vnd(donate)} | Tổng: {fmt_vnd(total)}\n"
-    if not msg_text:
-        msg_text = "Chưa có dữ liệu."
-    # Due to embed size limits, send one embed then plain text if needed
-    embed.add_field(name="Chi tiết:", value=msg_text[:1024] if len(msg_text) <= 1024 else msg_text[:1024], inline=False)
-    await ch.send(embed=embed)
-    # if more content left, send as subsequent messages
-    rest = msg_text[1024:]
-    while rest:
-        await ch.send(rest[:1900])
-        rest = rest[1900:]
-
+        msg += f"<@{uid}> — Giờ: {hours} giờ | Lương giờ: {fmt_vnd(pay)} | Donate: {fmt_vnd(donate)} | Tổng: {fmt_vnd(total)}\n"
+        if len(msg) > 1800:
+            await ch.send(msg)
+            msg = ""
+    if msg:
+        await ch.send(msg)
     try:
         await ctx.message.delete()
     except:
@@ -557,6 +645,7 @@ class CodeModal(ui.Modal):
         """
         super().__init__(title="Tạo / Sửa Code")
         self.existing = existing
+        # Prefill if existing provided (discord.py allows setting .default before sending)
         if existing:
             try:
                 self.title_field.default = existing.get("title", "")
@@ -592,8 +681,9 @@ async def code(ctx):
             except:
                 pass
             return
+        # Fallback: instruct
         await ctx.reply("Mở form tạo code... (nếu client hỗ trợ modal).", delete_after=6)
-    except:
+    except Exception:
         await ctx.reply("Không thể mở modal trong ngữ cảnh này.", delete_after=8)
 
 @bot.command()
@@ -609,6 +699,7 @@ async def code_edit(ctx, *, args: str = None):
         return await ctx.reply("Không tìm thấy template với tiêu đề đó.", delete_after=8)
     modal = CodeModal(existing=data)
     try:
+        # Attempt to open modal via interaction (best case). If ctx.interaction not available, DM fallback
         if hasattr(ctx, "interaction") and ctx.interaction:
             await ctx.interaction.response.send_modal(modal)
             try:
@@ -616,10 +707,10 @@ async def code_edit(ctx, *, args: str = None):
             except:
                 pass
             return
-        # fallback: DM instruction
-        await ctx.author.send("Không thể mở modal từ client này. Hãy dùng Discord PC/Web để edit template.")
-    except:
-        await ctx.reply("Không thể mở modal.", delete_after=8)
+        # Fallback: attempt to DM user with instruction (can't open modal from message ctx)
+        await ctx.author.send("Không thể mở modal từ client này. Hãy dùng client hỗ trợ modal (Discord PC/Web).")
+    except Exception:
+        await ctx.author.send("Không thể mở modal từ client này. Hãy dùng client hỗ trợ modal (Discord PC/Web).")
 
 @bot.command()
 async def code_delete(ctx, member: discord.Member = None):
@@ -636,7 +727,9 @@ async def code_delete(ctx, member: discord.Member = None):
 async def on_message(message):
     if message.author.bot:
         return
+    # process commands first
     await bot.process_commands(message)
+    # if message equals a saved code title -> send
     title = message.content.strip()
     if not title:
         return
@@ -656,7 +749,7 @@ async def on_message(message):
             print("code send error:", e)
 
 # -------------------------
-# Giveaway modal
+# Giveaway modal (unchanged)
 # -------------------------
 class GiveawayModal(ui.Modal):
     title = ui.TextInput(label="Tiêu đề", required=True)
@@ -733,29 +826,23 @@ async def gw(ctx):
             await ctx.interaction.response.send_modal(modal)
         else:
             await ctx.send("Mở form tạo giveaway (nếu client hỗ trợ modal)...", delete_after=5)
-    except:
+    except Exception:
         await ctx.send("Không thể mở modal trong client này.")
 
 # -------------------------
 # POST (fm / m) and Rent with private text channel creation
-# Rent includes text "Nhấn Rent nha khách iu ơi ⋆𐙚 ̊." shown WITH the Rent button in image post channel
-# Done button deletes the created private channel
+# Rent includes text: "Nhấn Rent nha khách iu ơi ⋆𐙚 ̊."
 # -------------------------
 class RentDoneView(ui.View):
     @ui.button(label="Done", style=discord.ButtonStyle.danger)
     async def done(self, interaction: discord.Interaction, button: ui.Button):
-        # delete the channel if user presses Done and if they have permission (owner or admin or role)
         try:
-            channel = interaction.channel
-            # allow admin or owner (owner is stored in channel topic if we set) or user messages
-            # We'll allow admin or the member who created channel by checking channel.name against their name
-            if interaction.user.guild_permissions.administrator or channel.name == interaction.user.name:
-                await channel.delete()
+            if interaction.user.guild_permissions.administrator or interaction.channel.name == interaction.user.name:
+                await interaction.channel.delete()
                 await interaction.response.send_message("Kênh đã xóa.", ephemeral=True)
             else:
-                # try check topic for owner mention
                 await interaction.response.send_message("Bạn không có quyền xóa kênh này.", ephemeral=True)
-        except Exception:
+        except:
             await interaction.response.send_message("Không thể xóa kênh.", ephemeral=True)
 
 class RentView(ui.View):
@@ -770,7 +857,7 @@ class RentView(ui.View):
         member = interaction.user
         guild = interaction.guild
         category = discord.utils.get(guild.categories, id=RENT_CATEGORY_ID)
-        name = f"⋆𐙚 ̊ - {member.name}"
+        name = f"{member.name}"
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
@@ -781,20 +868,14 @@ class RentView(ui.View):
             temp_channel = await guild.create_text_channel(name=name, overwrites=overwrites, category=category, reason="Rent created")
         except:
             temp_channel = await guild.create_text_channel(name=name, overwrites=overwrites, reason="Rent created")
-        # set channel topic to owner id for possible checks
-        try:
-            await temp_channel.edit(topic=f"owner:{member.id}")
-        except:
-            pass
         # send embed + image + greeting message in that channel
         try:
             await temp_channel.send(embed=self.embed, file=self.image_file)
         except:
             await temp_channel.send(embed=self.embed)
-        # greeting inside private channel
         await temp_channel.send("Khách ơi đợi tí, bọn mình rep liền nhaaa ₊˚⊹ ᰔ")
-        # Done button in channel to allow deletion
-        await temp_channel.send("Nhấn Done khi xong nha yêu ơiiii", view=RentDoneView())
+        await temp_channel.send("Nhấn Rent nha khách iu ơi ⋆𐙚 ̊.")
+        await temp_channel.send("Nhấn Done khi xong.", view=RentDoneView())
         await interaction.response.send_message(f"Đã tạo channel {temp_channel.mention}", ephemeral=True)
 
 @bot.command()
@@ -806,14 +887,12 @@ async def post(ctx, kind: str, *, caption: str = ""):
     attachment = ctx.message.attachments[0]
     image_file = await attachment.to_file()
     embed = Embed(description=caption, color=PASTEL_PINK)
-    # set image as 1:1 -> we can't force ratio but client respects square if image is square
     embed.set_image(url=f"attachment://{attachment.filename}")
     channel = bot.get_channel(IMAGE_CHANNEL_FEMALE if kind.lower()=="fm" else IMAGE_CHANNEL_MALE)
     if not channel:
         return await ctx.reply("Không tìm thấy channel ảnh.", delete_after=6)
     view = RentView(embed, image_file, ctx.author)
-    # send message with Rent button and the specified text together (so text and button are together)
-    await channel.send(content="Nhấn Rent nha khách iu ơi ⋆𐙚 ̊.", embed=embed, file=image_file, view=view)
+    await channel.send(embed=embed, file=image_file, view=view)
     try:
         await ctx.message.delete()
     except:
@@ -825,6 +904,7 @@ async def post(ctx, kind: str, *, caption: str = ""):
 @bot.command()
 async def text(ctx, *, content: str):
     embed = Embed(description=content, color=PASTEL_PINK)
+    # Do NOT add footer or author info -> hides who sent it
     try:
         await ctx.message.delete()
     except:
@@ -843,40 +923,6 @@ async def qr(ctx):
         await ctx.send(embed=embed, file=File(path, filename="qr.png"))
     else:
         await ctx.send(embed=embed)
-
-# -------------------------
-# !invv command: add permission for a user to join a voice (even if locked)
-# Usage:
-#   !invv @user             -> adds to voice that the command author is in
-#   !invv @user <voice_id>  -> adds to specified voice id
-# -------------------------
-@bot.command()
-async def invv(ctx, member: discord.Member = None, voice_id: str = None):
-    if not member:
-        return await ctx.reply("VD: !invv @user [voice_id]", delete_after=8)
-    guild = ctx.guild
-    target_voice = None
-    # if voice_id provided try parse mention or id
-    if voice_id:
-        # allow mention or id
-        m = re.match(r'<#?(\d+)>', voice_id)
-        vid = m.group(1) if m else voice_id
-        try:
-            vid = int(vid)
-            target_voice = guild.get_channel(vid)
-        except:
-            target_voice = None
-    else:
-        # try to use invoker's current voice channel
-        if ctx.author.voice and ctx.author.voice.channel:
-            target_voice = ctx.author.voice.channel
-    if not target_voice or not isinstance(target_voice, discord.VoiceChannel):
-        return await ctx.reply("Không tìm thấy voice channel để invite.", delete_after=8)
-    try:
-        await target_voice.set_permissions(member, connect=True, view_channel=True)
-        await ctx.reply(f"Đã cấp quyền cho {member.mention} vào {target_voice.mention}", delete_after=8)
-    except Exception as e:
-        await ctx.reply(f"Lỗi khi cấp quyền: {e}", delete_after=8)
 
 # -------------------------
 # Utilities: clear, av, ban, mute, rd, pick
@@ -980,7 +1026,7 @@ async def pick(ctx, *, options: str):
     await ctx.send(f"Chọn: **{pick_choice}**")
 
 # -------------------------
-# time command (timer)
+# time/qr/text (pastel)
 # -------------------------
 @bot.command()
 async def time(ctx, *, t: str):
@@ -998,12 +1044,20 @@ async def time(ctx, *, t: str):
     await ctx.send(f"{ctx.author.mention} ⏰ Đã hết giờ")
 
 # -------------------------
-# on_ready and error handler
+# Monthly report task removed per request (no automatic reports)
+# -------------------------
+# (monthly_report_task is intentionally omitted)
+
+# -------------------------
+# on_ready
 # -------------------------
 @bot.event
 async def on_ready():
     print(f"Bot running as {bot.user} (id: {bot.user.id})")
 
+# -------------------------
+# Error handler
+# -------------------------
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
